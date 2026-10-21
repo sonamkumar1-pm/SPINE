@@ -1,0 +1,93 @@
+#spine-hours-summary-panel {
+  margin: 12px 0 16px;
+  font-family: Arial, sans-serif;
+}
+
+.spine-hours-card {
+  background: #f8fbff;
+  border: 1px solid #cfe1ff;
+  border-radius: 10px;
+  padding: 14px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.spine-hours-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #163a63;
+  margin-bottom: 10px;
+}
+
+.spine-hours-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.spine-hours-metric {
+  background: #ffffff;
+  border: 1px solid #dde9f8;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.spine-hours-label {
+  font-size: 12px;
+  color: #5d6b7a;
+  margin-bottom: 4px;
+}
+
+.spine-hours-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: #0f4c81;
+}
+
+.spine-hours-meta {
+  font-size: 12px;
+  color: #4a5968;
+  margin-bottom: 8px;
+}
+
+.spine-hours-details summary {
+  cursor: pointer;
+  color: #0f4c81;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.spine-hours-list,
+.spine-hours-errors {
+  margin-top: 8px;
+}
+
+.spine-hours-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px dashed #d9e2ee;
+  font-size: 12px;
+}
+
+.spine-hours-error-title {
+  margin-top: 10px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #9a2f2f;
+}
+
+.spine-hours-error-item {
+  font-size: 12px;
+  color: #9a2f2f;
+  padding: 3px 0;
+}
+
+.spine-hours-ok,
+.spine-hours-empty {
+  font-size: 12px;
+  color: #2c6b2f;
+  padding: 4px 0;
+}

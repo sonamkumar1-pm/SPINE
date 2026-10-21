@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Spine Attendance Hours Helper",
+  "version": "1.0.0",
+  "description": "Shows total in and out hours on the attendance modal/report page.",
+  "content_scripts": [
+    {
+      "matches": ["[LINK]*","[LINK]*"],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
