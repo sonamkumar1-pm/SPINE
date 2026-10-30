@@ -5,7 +5,7 @@
   "description": "Shows total in and out hours on the attendance modal/report page.",
   "content_scripts": [
     {
-      "matches": ["[LINK]*","[LINK]*"],
+      "matches": ["[LINK]*","[LINK]*","[LINK]*"],
       "js": ["content.js"],
       "css": ["styles.css"],
       "run_at": "document_idle"
