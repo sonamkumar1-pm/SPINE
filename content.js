@@ -1,16 +1,33 @@
 (() => {
   "use strict";
 
-  const PANEL_ID = "spine-punch-hours-summary";
-  const STYLE_ID = "spine-punch-hours-style";
+  console.log("🚀 [Spine Helper] v1.2.1 initialized");
+
+  /* ==========================================================================
+     Constants
+     ========================================================================== */
+  const PUNCH_PANEL_ID = "spine-punch-hours-summary";
+  const LATE_BANNER_ID = "spine-late-banner";
+  const ALLOWED_GRACE_MINUTES = 45;
 
   let renderTimer = null;
   let tickInterval = null;
   let observerStarted = false;
-  let latestResult = null;
+  let latestPunchResult = null;
 
+  /* ==========================================================================
+     Formatting & Parsing Utilities
+     ========================================================================== */
   function norm(v) {
     return (v || "").replace(/\s+/g, " ").trim();
+  }
+
+  function fmt(mins) {
+    const total = Math.max(0, Math.floor(Number(mins) || 0));
+    const h = Math.floor(total / 60);
+    const m = total % 60;
+    if (h === 0) return `${m}m`;
+    return `${h}h ${m}m`;
   }
 
   function parseMinutes(timeStr) {
@@ -42,98 +59,60 @@
     return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")} ${mer}`;
   }
 
-  function fmt(mins) {
-    const total = Math.max(0, Math.floor(Number(mins) || 0));
-    const h = Math.floor(total / 60);
-    const m = total % 60;
-    return `${h}h ${m}m`;
+  /* Universal Late HRS Parser */
+  function parseLateValueToMinutes(raw) {
+    if (raw == null) return 0;
+    const s = String(raw).replace(/\s+/g, " ").trim();
+    if (!s || s === "-" || s === "--" || s === "N/A" || s === "nil" || s === "0" || s === "0.00" || s === "00:00" || s === "0:00") {
+      return 0;
+    }
+
+    // Text format "1h 20m", "45m", "20 mins"
+    const textMatch = s.match(/(?:(\d+)\s*h(?:rs?|ours?)?)?\s*(?:(\d+)\s*m(?:ins?|inutes?)?)?/i);
+    if (textMatch && (textMatch[1] || textMatch[2])) {
+      const h = parseInt(textMatch[1] || "0", 10);
+      const m = parseInt(textMatch[2] || "0", 10);
+      if (h > 0 || m > 0) return h * 60 + m;
+    }
+
+    // Colon format "00:21", "1:15"
+    const colonMatch = s.match(/^(\d{1,2}):(\d{2})$/);
+    if (colonMatch) {
+      return parseInt(colonMatch[1], 10) * 60 + parseInt(colonMatch[2], 10);
+    }
+
+    // Dot format "0.21" -> 21m, "0.06" -> 6m, "1.15" -> 75m, "3.01" -> 181m
+    const dotTwoMatch = s.match(/^(\d+)\.(\d{2})$/);
+    if (dotTwoMatch) {
+      const h = parseInt(dotTwoMatch[1], 10);
+      const m = parseInt(dotTwoMatch[2], 10);
+      if (m < 60) return h * 60 + m;
+      return Math.round((h + m / 100) * 60);
+    }
+
+    // Single decimal "0.5" -> 30m
+    const dotOneMatch = s.match(/^(\d+)\.(\d{1})$/);
+    if (dotOneMatch) {
+      return Math.round(parseFloat(s) * 60);
+    }
+
+    // Arbitrary float
+    if (/^\d+\.\d+$/.test(s)) {
+      return Math.round(parseFloat(s) * 60);
+    }
+
+    // Plain integer "21" -> 21m
+    const intMatch = s.match(/^(\d+)$/);
+    if (intMatch) {
+      return parseInt(intMatch[1], 10);
+    }
+
+    return 0;
   }
 
-  function ensureStyles() {
-    if (document.getElementById(STYLE_ID)) return;
-
-    const style = document.createElement("style");
-    style.id = STYLE_ID;
-    style.textContent = `
-      #${PANEL_ID} {
-        margin: 10px 0 12px 0;
-        width: 100%;
-        box-sizing: border-box;
-      }
-      #${PANEL_ID} .sp-card {
-        background: #eef7ff;
-        border: 1px solid #c8dced;
-        border-radius: 8px;
-        padding: 12px;
-        font-family: Arial, sans-serif;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-      }
-      #${PANEL_ID} .sp-title {
-        font-size: 16px;
-        font-weight: 700;
-        color: #234861;
-        margin-bottom: 10px;
-      }
-      #${PANEL_ID} .sp-grid {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(150px, 1fr));
-        gap: 10px;
-        margin-bottom: 8px;
-      }
-      #${PANEL_ID} .sp-box {
-        background: #ffffff;
-        border: 1px solid #dce6ef;
-        border-radius: 6px;
-        padding: 10px;
-      }
-      #${PANEL_ID} .sp-label {
-        font-size: 12px;
-        color: #617284;
-        margin-bottom: 4px;
-      }
-      #${PANEL_ID} .sp-value {
-        font-size: 22px;
-        font-weight: 700;
-        color: #0a517d;
-      }
-      #${PANEL_ID} .sp-value.small {
-        font-size: 18px;
-      }
-      #${PANEL_ID} .sp-meta,
-      #${PANEL_ID} .sp-line {
-        font-size: 12px;
-        color: #48596a;
-      }
-      #${PANEL_ID} .sp-line {
-        padding: 4px 0;
-        border-bottom: 1px dashed #dfe6ec;
-      }
-      #${PANEL_ID} .sp-warning {
-        color: #a13d3d;
-      }
-      #${PANEL_ID} .sp-good {
-        color: #1f8a43 !important;
-      }
-      #${PANEL_ID} .sp-bad {
-        color: #c0392b !important;
-      }
-      #${PANEL_ID} .sp-sub {
-        margin-top: 4px;
-        font-size: 12px;
-        font-weight: 600;
-      }
-      #${PANEL_ID} details {
-        margin-top: 8px;
-      }
-      #${PANEL_ID} summary {
-        cursor: pointer;
-        color: #0a517d;
-        font-weight: 600;
-      }
-    `;
-    document.head.appendChild(style);
-  }
-
+  /* ==========================================================================
+     FEATURE 1: Daily Punch Summary Panel (Purana In/Out Flow)
+     ========================================================================== */
   function getHeaderCells(table) {
     const headerRow = table.querySelector("tr");
     if (!headerRow) return [];
@@ -177,7 +156,7 @@
     return null;
   }
 
-  function extractRows(table) {
+  function extractPunchRows(table) {
     const rows = [];
     const trList = Array.from(table.querySelectorAll("tr"));
 
@@ -195,9 +174,8 @@
     return rows;
   }
 
-  function uniqueRows(rows) {
+  function uniquePunchRows(rows) {
     const seen = new Set();
-
     return rows.filter(row => {
       const key = `${row.date}|${row.entryTime}|${row.dir}`;
       if (seen.has(key)) return false;
@@ -206,8 +184,8 @@
     });
   }
 
-  function calculate(rows) {
-    const cleanRows = uniqueRows(rows);
+  function calculatePunch(rows) {
+    const cleanRows = uniquePunchRows(rows);
 
     const result = {
       inMinutes: 0,
@@ -288,12 +266,12 @@
     return result;
   }
 
-  function ensurePanel() {
-    let panel = document.getElementById(PANEL_ID);
+  function ensurePunchPanel() {
+    let panel = document.getElementById(PUNCH_PANEL_ID);
     if (panel) return panel;
 
     panel = document.createElement("div");
-    panel.id = PANEL_ID;
+    panel.id = PUNCH_PANEL_ID;
     panel.innerHTML = `
       <div class="sp-card">
         <div class="sp-title">Attendance Hours Summary</div>
@@ -368,60 +346,53 @@
     }
   }
 
-  function render() {
-    try {
-      ensureStyles();
+  function renderPunchSummary() {
+    const table = findPunchTable();
+    if (!table) return;
 
-      const table = findPunchTable();
-      if (!table) return;
-
-      const panel = ensurePanel();
-
-      if (panel.parentElement !== table.parentElement) {
-        panel.remove();
-        table.parentElement.insertBefore(panel, table);
-      }
-
-      const rows = extractRows(table);
-      const result = calculate(rows);
-      latestResult = result;
-
-      const inEl = panel.querySelector('[data-role="in"]');
-      const outEl = panel.querySelector('[data-role="out"]');
-      const openInEl = panel.querySelector('[data-role="open-in"]');
-      const totalOpenEl = panel.querySelector('[data-role="total-open"]');
-      const rowsEl = panel.querySelector('[data-role="rows"]');
-      const metaEl = panel.querySelector('[data-role="meta"]');
-      const detailsEl = panel.querySelector('[data-role="details"]');
-      const warningsEl = panel.querySelector('[data-role="warnings"]');
-
-      if (inEl) inEl.textContent = fmt(result.inMinutes);
-      if (outEl) outEl.textContent = fmt(result.outMinutes);
-      if (openInEl) openInEl.textContent = fmt(result.openInMinutes || 0);
-      if (totalOpenEl) totalOpenEl.textContent = fmt(result.totalInPlusOpen || 0);
-      if (rowsEl) rowsEl.textContent = `${result.rawCount} / ${result.uniqueCount}`;
-
-      if (metaEl) {
-        metaEl.textContent = `Rows found: ${result.rawCount}, unique rows used: ${result.uniqueCount}`;
-      }
-
-      if (detailsEl) {
-        detailsEl.innerHTML = result.details.length
-          ? result.details.map(line => `<div class="sp-line">${line}</div>`).join("")
-          : `<div class="sp-line">No valid sessions found.</div>`;
-      }
-
-      if (warningsEl) {
-        warningsEl.innerHTML = result.warnings.length
-          ? result.warnings.map(line => `<div class="sp-line sp-warning">${line}</div>`).join("")
-          : `<div class="sp-line">No warnings.</div>`;
-      }
-
-      updateCompletionUI(panel, result);
-      startTicking(panel);
-    } catch (err) {
-      console.error("Spine punch summary error", err);
+    const panel = ensurePunchPanel();
+    if (panel.parentElement !== table.parentElement) {
+      panel.remove();
+      table.parentElement.insertBefore(panel, table);
     }
+
+    const rows = extractPunchRows(table);
+    const result = calculatePunch(rows);
+    latestPunchResult = result;
+
+    const inEl = panel.querySelector('[data-role="in"]');
+    const outEl = panel.querySelector('[data-role="out"]');
+    const openInEl = panel.querySelector('[data-role="open-in"]');
+    const totalOpenEl = panel.querySelector('[data-role="total-open"]');
+    const rowsEl = panel.querySelector('[data-role="rows"]');
+    const metaEl = panel.querySelector('[data-role="meta"]');
+    const detailsEl = panel.querySelector('[data-role="details"]');
+    const warningsEl = panel.querySelector('[data-role="warnings"]');
+
+    if (inEl) inEl.textContent = fmt(result.inMinutes);
+    if (outEl) outEl.textContent = fmt(result.outMinutes);
+    if (openInEl) openInEl.textContent = fmt(result.openInMinutes || 0);
+    if (totalOpenEl) totalOpenEl.textContent = fmt(result.totalInPlusOpen || 0);
+    if (rowsEl) rowsEl.textContent = `${result.rawCount} / ${result.uniqueCount}`;
+
+    if (metaEl) {
+      metaEl.textContent = `Rows found: ${result.rawCount}, unique rows used: ${result.uniqueCount}`;
+    }
+
+    if (detailsEl) {
+      detailsEl.innerHTML = result.details.length
+        ? result.details.map(line => `<div class="sp-line">${line}</div>`).join("")
+        : `<div class="sp-line">No valid sessions found.</div>`;
+    }
+
+    if (warningsEl) {
+      warningsEl.innerHTML = result.warnings.length
+        ? result.warnings.map(line => `<div class="sp-line sp-warning">${line}</div>`).join("")
+        : `<div class="sp-line">No warnings.</div>`;
+    }
+
+    updateCompletionUI(panel, result);
+    startTicking(panel);
   }
 
   function startTicking(panel) {
@@ -431,27 +402,286 @@
     }
 
     tickInterval = setInterval(() => {
-      if (!latestResult || !document.getElementById(PANEL_ID)) return;
+      if (!latestPunchResult || !document.getElementById(PUNCH_PANEL_ID)) return;
 
       const openInEl = panel.querySelector('[data-role="open-in"]');
       const totalOpenEl = panel.querySelector('[data-role="total-open"]');
 
-      if (latestResult.lastOpenInTime) {
-        const openStart = parseMinutes(latestResult.lastOpenInTime);
+      if (latestPunchResult.lastOpenInTime) {
+        const openStart = parseMinutes(latestPunchResult.lastOpenInTime);
         const now = new Date();
         const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
         if (openStart != null && nowMinutes >= openStart) {
-          latestResult.openInMinutes = nowMinutes - openStart;
-          latestResult.totalInPlusOpen = latestResult.inMinutes + latestResult.openInMinutes;
+          latestPunchResult.openInMinutes = nowMinutes - openStart;
+          latestPunchResult.totalInPlusOpen = latestPunchResult.inMinutes + latestPunchResult.openInMinutes;
 
-          if (openInEl) openInEl.textContent = fmt(latestResult.openInMinutes);
-          if (totalOpenEl) totalOpenEl.textContent = fmt(latestResult.totalInPlusOpen);
+          if (openInEl) openInEl.textContent = fmt(latestPunchResult.openInMinutes);
+          if (totalOpenEl) totalOpenEl.textContent = fmt(latestPunchResult.totalInPlusOpen);
         }
       }
 
-      updateCompletionUI(panel, latestResult);
+      updateCompletionUI(panel, latestPunchResult);
     }, 1000);
+  }
+
+  /* ==========================================================================
+     FEATURE 2: Late Hours Detection & Greedy Highlighting
+     ========================================================================== */
+
+  // Helper: Detect if a <tr> is a valid daily attendance row (starts with a date like 01-Oct-26 or 01/10/2026)
+  function isDateRow(tr, dateColIdx) {
+    const dateCell = tr.cells[dateColIdx] || tr.cells[0];
+    if (!dateCell) return false;
+    const txt = (dateCell.innerText || "").trim();
+    return /^\d{1,2}[-/ ]?[a-zA-Z0-9]*/.test(txt);
+  }
+
+  function findAttendanceTableAndColumns() {
+    const allTables = Array.from(document.querySelectorAll("table"));
+
+    for (const table of allTables) {
+      const rows = Array.from(table.querySelectorAll("tr"));
+      if (rows.length < 5) continue; // Must be a monthly attendance table with multiple rows
+
+      // Check rows for header
+      let headerTr = null;
+      let lateColIndex = -1;
+      let dateColIndex = -1;
+
+      for (let r = 0; r < Math.min(5, rows.length); r++) {
+        const tr = rows[r];
+        const cells = Array.from(tr.querySelectorAll("th, td"));
+
+        for (let c = 0; c < cells.length; c++) {
+          const text = (cells[c].innerText || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+          // Target "Late HRS." column strictly, avoiding "Acc Late Hrs"
+          if (lateColIndex === -1 && text.includes("late") && !text.includes("acc")) {
+            lateColIndex = c;
+          }
+
+          // Target "Date" column
+          if (dateColIndex === -1 && (text === "date" || text.includes("att date") || text === "dt")) {
+            dateColIndex = c;
+          }
+        }
+
+        if (lateColIndex !== -1) {
+          headerTr = tr;
+          break;
+        }
+      }
+
+      // If we found a table with "Late HRS." header and multiple date rows:
+      if (lateColIndex !== -1) {
+        if (dateColIndex === -1) dateColIndex = 0;
+
+        // Verify that data rows actually exist under this table
+        const dateRows = rows.filter(tr => isDateRow(tr, dateColIndex));
+        if (dateRows.length >= 3) {
+          return {
+            table,
+            headerTr,
+            lateColIndex,
+            dateColIndex,
+            dateRows
+          };
+        }
+      }
+    }
+
+    // Secondary scan: Find any table where column 0 has dates and another column has decimal numbers (e.g. 0.21, 0.27)
+    for (const table of allTables) {
+      const rows = Array.from(table.querySelectorAll("tr"));
+      if (rows.length < 10) continue;
+
+      const dateRows = rows.filter(tr => isDateRow(tr, 0));
+      if (dateRows.length < 5) continue;
+
+      // Scan each column index to find the one with decimal time values
+      const sampleRow = dateRows[0];
+      for (let c = 0; c < sampleRow.cells.length; c++) {
+        // Count how many date rows have values matching ^\d+\.\d{2}$ in column c
+        const decimalCount = dateRows.filter(r => {
+          const val = (r.cells[c]?.innerText || "").trim();
+          return /^\d+\.\d{2}$/.test(val);
+        }).length;
+
+        // Check if there are non-zero late values (like 0.21, 0.27)
+        const hasNonZeroLate = dateRows.some(r => {
+          const val = (r.cells[c]?.innerText || "").trim();
+          return val === "0.21" || val === "0.27" || val === "0.24" || val === "0.14" || val === "0.23";
+        });
+
+        if (decimalCount >= dateRows.length * 0.7 && hasNonZeroLate) {
+          console.log(`🎯 [Spine Helper] Verified Late HRS column via content matching at index: ${c}`);
+          return {
+            table,
+            headerTr: null,
+            lateColIndex: c,
+            dateColIndex: 0,
+            dateRows
+          };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function renderLateHoursTracker() {
+    const tableInfo = findAttendanceTableAndColumns();
+    if (!tableInfo) return;
+
+    const { table, lateColIndex, dateColIndex, dateRows } = tableInfo;
+
+    // 1. Clean up any previous markers
+    table.querySelectorAll(".spine-late-cell-marker").forEach(el => {
+      el.classList.remove("spine-late-cell-marker");
+      el.removeAttribute("title");
+    });
+    table.querySelectorAll(".sp-apply-swipe-tag").forEach(el => el.remove());
+    table.querySelectorAll(".sp-date-swipe-pill").forEach(el => el.remove());
+    table.querySelectorAll(".sp-late-row-highlight").forEach(el => {
+      el.classList.remove("sp-late-row-highlight");
+    });
+    table.querySelectorAll(".sp-covered-by-grace").forEach(el => {
+      el.classList.remove("sp-covered-by-grace");
+      el.removeAttribute("title");
+    });
+
+    // 2. Extract valid data rows
+    const dataRows = [];
+    for (const tr of dateRows) {
+      const lateCell = tr.cells[lateColIndex];
+      const dateCell = tr.cells[dateColIndex] || tr.cells[0];
+      if (!lateCell) continue;
+
+      const rawLate = norm(lateCell.innerText);
+      const rawDate = dateCell ? norm(dateCell.innerText) : "";
+      const lateMins = parseLateValueToMinutes(rawLate);
+
+      dataRows.push({
+        tr,
+        lateCell,
+        dateCell,
+        rawLate,
+        rawDate,
+        lateMinutes: lateMins
+      });
+    }
+
+    if (!dataRows.length) return;
+
+    // 3. Calculate Total Late Minutes
+    const totalLateMinutes = dataRows.reduce((sum, r) => sum + r.lateMinutes, 0);
+    const totalLateHours = (totalLateMinutes / 60).toFixed(2);
+    console.log(`⏱️ [Spine Helper] Attendance Sheet: ${dataRows.length} days | Total Late: ${totalLateMinutes}m (${fmt(totalLateMinutes)})`);
+
+    // 4. Run Greedy Algorithm: Sort rows with late > 0 from largest to lowest
+    const rowsWithLate = dataRows.filter(r => r.lateMinutes > 0);
+    rowsWithLate.sort((a, b) => b.lateMinutes - a.lateMinutes);
+
+    let currentRemaining = totalLateMinutes;
+    const markedRows = new Set();
+
+    if (totalLateMinutes > ALLOWED_GRACE_MINUTES) {
+      for (const row of rowsWithLate) {
+        if (currentRemaining <= ALLOWED_GRACE_MINUTES) {
+          break; // Target <= 45 mins reached! Stop!
+        }
+        markedRows.add(row);
+        currentRemaining -= row.lateMinutes;
+      }
+    }
+
+    console.log(`🎯 [Spine Helper] Marked ${markedRows.size} days for Apply Swipe (Largest to lowest). Remaining Late: ${currentRemaining}m`);
+
+    // 5. Apply Visual Markers on UI
+    for (const row of dataRows) {
+      if (row.lateMinutes === 0) continue;
+
+      if (markedRows.has(row)) {
+        // HIGHLIGHT: Orange Cell Marker (Matches user screenshot)
+        row.lateCell.classList.add("spine-late-cell-marker");
+        row.lateCell.title = `⚡ Apply Swipe Required: ${row.rawLate} (${row.lateMinutes} mins late)\nApply swipe to adjust this day!`;
+
+        // Add "Apply Swipe" tag inside cell
+        if (!row.lateCell.querySelector(".sp-apply-swipe-tag")) {
+          const tag = document.createElement("span");
+          tag.className = "sp-apply-swipe-tag";
+          tag.textContent = "Apply Swipe";
+          row.lateCell.appendChild(tag);
+        }
+
+        // Add "⚡ Apply Swipe" pill in Date column
+        if (row.dateCell && !row.dateCell.querySelector(".sp-date-swipe-pill")) {
+          const pill = document.createElement("span");
+          pill.className = "sp-date-swipe-pill";
+          pill.textContent = "⚡ Apply Swipe";
+          pill.title = `Apply swipe for ${row.rawDate || "this date"} (${row.rawLate})`;
+          row.dateCell.appendChild(pill);
+        }
+
+        // Highlight Row
+        row.tr.classList.add("sp-late-row-highlight");
+      } else {
+        // Safe: Covered by the 45-minute grace allowance
+        row.lateCell.classList.add("sp-covered-by-grace");
+        row.lateCell.title = `✅ Late: ${row.rawLate} (${row.lateMinutes} mins) - Covered by 45m grace limit (No swipe needed)`;
+      }
+    }
+
+    // 6. Display Clean Summary Banner Above Table
+    let banner = document.getElementById(LATE_BANNER_ID);
+    if (!banner) {
+      banner = document.createElement("div");
+      banner.id = LATE_BANNER_ID;
+    }
+
+    if (banner.parentElement !== table.parentElement) {
+      banner.remove();
+      table.parentElement.insertBefore(banner, table);
+    }
+
+    if (totalLateMinutes > ALLOWED_GRACE_MINUTES) {
+      const markedListStr = Array.from(markedRows).map(r => `<span class="sp-banner-badge">${r.rawLate}</span>`).join(" ");
+      const excessMins = totalLateMinutes - ALLOWED_GRACE_MINUTES;
+
+      banner.innerHTML = `
+        <div class="sp-banner-main">
+          <span class="sp-banner-icon">⏱️</span>
+          <span>Total Late: <strong>${fmt(totalLateMinutes)} (${totalLateMinutes} mins = 3.01)</strong> | Allowed Grace: <strong>45 mins</strong> | Excess to Adjust: <strong>${excessMins} mins</strong></span>
+        </div>
+        <div class="sp-banner-sub">
+          👉 <strong>${markedRows.size} Days Marked for "Apply Swipe" (Largest to Lowest):</strong> ${markedListStr}
+          <br>Regularizing these ${markedRows.size} days brings remaining late down to <strong>${currentRemaining} mins (<= 45 mins safe)</strong>.
+        </div>
+      `;
+    } else {
+      banner.innerHTML = `
+        <div class="sp-banner-main" style="color: #15803d;">
+          <span class="sp-banner-icon">✅</span>
+          <span>Total Late: <strong>${totalLateMinutes} mins</strong> | Allowed Grace: <strong>45 mins</strong></span>
+        </div>
+        <div class="sp-banner-sub" style="color: #15803d;">
+          Your late hours are completely within the 45-minute allowed grace limit. No swipe regularization required!
+        </div>
+      `;
+    }
+  }
+
+  /* ==========================================================================
+     Master Render & Event Listeners
+     ========================================================================== */
+  function render() {
+    try {
+      renderPunchSummary();
+      renderLateHoursTracker();
+    } catch (err) {
+      console.error("Spine Helper Render Error:", err);
+    }
   }
 
   function scheduleRender() {
@@ -463,7 +693,17 @@
     if (observerStarted) return;
     observerStarted = true;
 
-    const mo = new MutationObserver(() => {
+    const mo = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (
+          m.target.id === PUNCH_PANEL_ID ||
+          m.target.id === LATE_BANNER_ID ||
+          m.target.closest?.(`#${PUNCH_PANEL_ID}`) ||
+          m.target.closest?.(`#${LATE_BANNER_ID}`)
+        ) {
+          return;
+        }
+      }
       scheduleRender();
     });
 
