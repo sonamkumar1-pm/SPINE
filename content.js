@@ -7,6 +7,20 @@
   const PUNCH_PANEL_ID = "spine-punch-hours-summary";
   const LATE_BANNER_ID = "spine-late-banner";
   const ALLOWED_GRACE_MINUTES = 45;
+  const PENDING_SWIPE_KEY = "spine_pending_swipe";
+  const PENDING_SWIPE_TTL_MS = 15 * 60 * 1000;
+  const DEFAULT_REASON = "Late mark regularization (${mins}m late on ${date}) - Swipe missed";
+
+  // Elements injected by this script; DOM mutations inside them must not trigger a re-render
+  const OWN_NODE_SELECTOR = [
+    `#${PUNCH_PANEL_ID}`,
+    `#${LATE_BANNER_ID}`,
+    "#spine-toast",
+    "#spine-apply-swipe-dialog-overlay",
+    "#spine-page-autofill-banner",
+    ".sp-date-swipe-pill",
+    ".sp-apply-swipe-tag"
+  ].join(", ");
 
   let renderTimer = null;
   let tickInterval = null;
@@ -20,6 +34,41 @@
      ========================================================================== */
   function norm(v) {
     return (v || "").replace(/\s+/g, " ").trim();
+  }
+
+  // Escapes page-derived text before it is interpolated into innerHTML
+  function esc(v) {
+    return String(v ?? "").replace(/[&<>"']/g, ch => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    })[ch]);
+  }
+
+  // Writes only when the text changes, so the 1s tick doesn't churn the DOM
+  function setText(el, text) {
+    if (el && el.textContent !== text) el.textContent = text;
+  }
+
+  function nowMinutes() {
+    const now = new Date();
+    return now.getHours() * 60 + now.getMinutes();
+  }
+
+  function applyTemplate(template, ctx) {
+    return (template || DEFAULT_REASON)
+      .replace(/\$\{mins\}/g, String(ctx.lateMinutes ?? ""))
+      .replace(/\$\{date\}/g, String(ctx.rawDate ?? ""))
+      .replace(/\$\{late\}/g, String(ctx.rawLate ?? ""));
+  }
+
+  function storageArea(area) {
+    return typeof chrome !== "undefined" && chrome.storage && chrome.storage[area] ? chrome.storage[area] : null;
+  }
+
+  function clearPendingSwipe() {
+    try {
+      sessionStorage.removeItem(PENDING_SWIPE_KEY);
+    } catch (_) {}
+    storageArea("local")?.remove(PENDING_SWIPE_KEY);
   }
 
   function fmt(mins) {
@@ -134,21 +183,23 @@
 
   function findPunchTable() {
     const tables = Array.from(document.querySelectorAll("table"));
+    let bodyHasShiftTime = null; // body text is expensive to read, so read it at most once
 
     for (const table of tables) {
       if (!isPunchTable(table)) continue;
+      if (!table.textContent.includes("Web Attendance Api")) continue;
 
-      const tableText = norm(table.innerText);
       const aroundText = norm(
         (table.parentElement?.innerText || "") + " " +
         (table.parentElement?.previousElementSibling?.innerText || "") + " " +
         (table.previousElementSibling?.innerText || "")
       );
 
-      if (
-        tableText.includes("Web Attendance Api") &&
-        (aroundText.includes("Daily In Out Punch") || document.body.innerText.includes("Shift [GS] Time"))
-      ) {
+      if (!aroundText.includes("Daily In Out Punch") && bodyHasShiftTime === null) {
+        bodyHasShiftTime = document.body.textContent.includes("Shift [GS] Time");
+      }
+
+      if (aroundText.includes("Daily In Out Punch") || bodyHasShiftTime) {
         return table;
       }
     }
@@ -237,14 +288,13 @@
 
     const lastRow = cleanRows[cleanRows.length - 1];
     if (lastRow && lastRow.dir === "IN") {
-      const now = new Date();
-      const nowMinutes = now.getHours() * 60 + now.getMinutes();
+      const current = nowMinutes();
       const lastMinutes = parseMinutes(lastRow.entryTime);
 
       result.lastOpenInTime = lastRow.entryTime;
 
-      if (lastMinutes != null && nowMinutes >= lastMinutes) {
-        result.openInMinutes = nowMinutes - lastMinutes;
+      if (lastMinutes != null && current >= lastMinutes) {
+        result.openInMinutes = current - lastMinutes;
         result.warnings.push(`Open In since ${lastRow.entryTime} = ${fmt(result.openInMinutes)}`);
       } else {
         result.warnings.push(`Open In at ${lastRow.entryTime}`);
@@ -320,30 +370,22 @@
 
     if (!completionTimeEl || !completionTimerEl) return;
 
-    completionTimeEl.classList.remove("sp-good", "sp-bad");
-    completionTimerEl.classList.remove("sp-good", "sp-bad");
-
     if (result.estimatedCompletionMinute == null) {
-      completionTimeEl.textContent = "--";
-      completionTimerEl.textContent = "Need an open IN punch";
+      for (const el of [completionTimeEl, completionTimerEl]) el.classList.remove("sp-good", "sp-bad");
+      setText(completionTimeEl, "--");
+      setText(completionTimerEl, "Need an open IN punch");
       return;
     }
 
-    const now = new Date();
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
-    const diff = result.estimatedCompletionMinute - nowMinutes;
+    const diff = result.estimatedCompletionMinute - nowMinutes();
+    const done = diff <= 0;
 
-    completionTimeEl.textContent = to12Hour(result.estimatedCompletionMinute);
-
-    if (diff <= 0) {
-      completionTimeEl.classList.add("sp-good");
-      completionTimerEl.classList.add("sp-good");
-      completionTimerEl.textContent = `Completed by ${fmt(Math.abs(diff))} ago`;
-    } else {
-      completionTimeEl.classList.add("sp-bad");
-      completionTimerEl.classList.add("sp-bad");
-      completionTimerEl.textContent = `${fmt(diff)} remaining`;
+    for (const el of [completionTimeEl, completionTimerEl]) {
+      el.classList.toggle("sp-good", done);
+      el.classList.toggle("sp-bad", !done);
     }
+    setText(completionTimeEl, to12Hour(result.estimatedCompletionMinute));
+    setText(completionTimerEl, done ? `Completed by ${fmt(-diff)} ago` : `${fmt(diff)} remaining`);
   }
 
   function renderPunchSummary() {
@@ -360,65 +402,46 @@
     const result = calculatePunch(rows);
     latestPunchResult = result;
 
-    const inEl = panel.querySelector('[data-role="in"]');
-    const outEl = panel.querySelector('[data-role="out"]');
-    const openInEl = panel.querySelector('[data-role="open-in"]');
-    const totalOpenEl = panel.querySelector('[data-role="total-open"]');
-    const rowsEl = panel.querySelector('[data-role="rows"]');
-    const metaEl = panel.querySelector('[data-role="meta"]');
-    const detailsEl = panel.querySelector('[data-role="details"]');
-    const warningsEl = panel.querySelector('[data-role="warnings"]');
+    const q = role => panel.querySelector(`[data-role="${role}"]`);
 
-    if (inEl) inEl.textContent = fmt(result.inMinutes);
-    if (outEl) outEl.textContent = fmt(result.outMinutes);
-    if (openInEl) openInEl.textContent = fmt(result.openInMinutes || 0);
-    if (totalOpenEl) totalOpenEl.textContent = fmt(result.totalInPlusOpen || 0);
-    if (rowsEl) rowsEl.textContent = `${result.rawCount} / ${result.uniqueCount}`;
+    setText(q("in"), fmt(result.inMinutes));
+    setText(q("out"), fmt(result.outMinutes));
+    setText(q("open-in"), fmt(result.openInMinutes || 0));
+    setText(q("total-open"), fmt(result.totalInPlusOpen || 0));
+    setText(q("rows"), `${result.rawCount} / ${result.uniqueCount}`);
+    setText(q("meta"), `Rows found: ${result.rawCount}, unique rows used: ${result.uniqueCount}`);
 
-    if (metaEl) {
-      metaEl.textContent = `Rows found: ${result.rawCount}, unique rows used: ${result.uniqueCount}`;
-    }
+    const linesHtml = (lines, cls, empty) => lines.length
+      ? lines.map(line => `<div class="${cls}">${esc(line)}</div>`).join("")
+      : `<div class="sp-line">${empty}</div>`;
 
-    if (detailsEl) {
-      detailsEl.innerHTML = result.details.length
-        ? result.details.map(line => `<div class="sp-line">${line}</div>`).join("")
-        : `<div class="sp-line">No valid sessions found.</div>`;
-    }
-
-    if (warningsEl) {
-      warningsEl.innerHTML = result.warnings.length
-        ? result.warnings.map(line => `<div class="sp-line sp-warning">${line}</div>`).join("")
-        : `<div class="sp-line">No warnings.</div>`;
-    }
+    const detailsEl = q("details");
+    const warningsEl = q("warnings");
+    const detailsHtml = linesHtml(result.details, "sp-line", "No valid sessions found.");
+    const warningsHtml = linesHtml(result.warnings, "sp-line sp-warning", "No warnings.");
+    if (detailsEl && detailsEl.innerHTML !== detailsHtml) detailsEl.innerHTML = detailsHtml;
+    if (warningsEl && warningsEl.innerHTML !== warningsHtml) warningsEl.innerHTML = warningsHtml;
 
     updateCompletionUI(panel, result);
     startTicking(panel);
   }
 
   function startTicking(panel) {
-    if (tickInterval) {
-      clearInterval(tickInterval);
-      tickInterval = null;
-    }
+    clearInterval(tickInterval);
+
+    const openInEl = panel.querySelector('[data-role="open-in"]');
+    const totalOpenEl = panel.querySelector('[data-role="total-open"]');
+    const openStart = latestPunchResult?.lastOpenInTime ? parseMinutes(latestPunchResult.lastOpenInTime) : null;
 
     tickInterval = setInterval(() => {
-      if (!latestPunchResult || !document.getElementById(PUNCH_PANEL_ID)) return;
+      if (!latestPunchResult || !panel.isConnected) return;
 
-      const openInEl = panel.querySelector('[data-role="open-in"]');
-      const totalOpenEl = panel.querySelector('[data-role="total-open"]');
-
-      if (latestPunchResult.lastOpenInTime) {
-        const openStart = parseMinutes(latestPunchResult.lastOpenInTime);
-        const now = new Date();
-        const nowMinutes = now.getHours() * 60 + now.getMinutes();
-
-        if (openStart != null && nowMinutes >= openStart) {
-          latestPunchResult.openInMinutes = nowMinutes - openStart;
-          latestPunchResult.totalInPlusOpen = latestPunchResult.inMinutes + latestPunchResult.openInMinutes;
-
-          if (openInEl) openInEl.textContent = fmt(latestPunchResult.openInMinutes);
-          if (totalOpenEl) totalOpenEl.textContent = fmt(latestPunchResult.totalInPlusOpen);
-        }
+      const current = nowMinutes();
+      if (openStart != null && current >= openStart) {
+        latestPunchResult.openInMinutes = current - openStart;
+        latestPunchResult.totalInPlusOpen = latestPunchResult.inMinutes + latestPunchResult.openInMinutes;
+        setText(openInEl, fmt(latestPunchResult.openInMinutes));
+        setText(totalOpenEl, fmt(latestPunchResult.totalInPlusOpen));
       }
 
       updateCompletionUI(panel, latestPunchResult);
@@ -502,22 +525,19 @@
       const dateRows = rows.filter(tr => isDateRow(tr, 0));
       if (dateRows.length < 5) continue;
 
-      // Scan each column index to find the one with decimal time values
+      // Scan each column index (skipping the date column) to find one holding h.mm late values
       const sampleRow = dateRows[0];
-      for (let c = 0; c < sampleRow.cells.length; c++) {
-        // Count how many date rows have values matching ^\d+\.\d{2}$ in column c
-        const decimalCount = dateRows.filter(r => {
-          const val = (r.cells[c]?.innerText || "").trim();
-          return /^\d+\.\d{2}$/.test(val);
-        }).length;
+      for (let c = 1; c < sampleRow.cells.length; c++) {
+        const values = dateRows.map(r => (r.cells[c]?.textContent || "").trim());
+        const decimals = values.filter(v => /^\d+\.\d{2}$/.test(v));
 
-        // Check if there are non-zero late values (like 0.21, 0.27)
-        const hasNonZeroLate = dateRows.some(r => {
-          const val = (r.cells[c]?.innerText || "").trim();
-          return val === "0.21" || val === "0.27" || val === "0.24" || val === "0.14" || val === "0.23";
-        });
+        // Late values are mostly 0.00 with a few small non-zero entries (e.g. 0.21), never whole shifts
+        const nonZero = decimals.filter(v => v !== "0.00");
+        const looksLikeLate = nonZero.length > 0 &&
+          nonZero.length < decimals.length &&
+          nonZero.every(v => parseFloat(v) < 5);
 
-        if (decimalCount >= dateRows.length * 0.7 && hasNonZeroLate) {
+        if (decimals.length >= dateRows.length * 0.7 && looksLikeLate) {
           console.log(`🎯 [Spine Helper] Verified Late HRS column via content matching at index: ${c}`);
           return {
             table,
@@ -536,8 +556,7 @@
   /* ==========================================================================
      FEATURE 3: Apply Swipe Quick Dialog & Redirect Auto-Fill
      ========================================================================== */
-  let activePendingSwipe = null;
-  let cachedDefaultReason = "Late mark regularization (${mins}m late) - Swipe missed";
+  let cachedDefaultReason = DEFAULT_REASON;
   let cachedApplySwipeUrl = "";
 
   function showToast(message, type = "info") {
@@ -576,32 +595,6 @@
     };
   }
 
-  function findApplySwipeLink() {
-    const elements = Array.from(document.querySelectorAll("a, button, li[onclick], span[onclick], div[onclick]"));
-    for (const el of elements) {
-      if (el.classList.contains("sp-date-swipe-pill") || el.classList.contains("sp-banner-btn")) continue;
-      
-      const txt = (el.innerText || "").toLowerCase().trim();
-      const href = (el.getAttribute("href") || "").toLowerCase();
-      const title = (el.getAttribute("title") || "").toLowerCase();
-      const onclick = (el.getAttribute("onclick") || "").toLowerCase();
-
-      if (
-        txt === "apply swipe" ||
-        txt === "apply swipe regularization" ||
-        txt.includes("swipe regularization") ||
-        title.includes("apply swipe") ||
-        href.includes("applyswipe") ||
-        href.includes("swiperegularization") ||
-        onclick.includes("applyswipe") ||
-        onclick.includes("swiperegularization")
-      ) {
-        return el;
-      }
-    }
-    return null;
-  }
-
   function openApplySwipeDialog(rowData) {
     const { rawDate, rawLate, lateMinutes, tr } = rowData;
     const times = extractRowTimes(tr);
@@ -612,10 +605,14 @@
     overlay.id = "spine-apply-swipe-dialog-overlay";
     overlay.className = "sp-dialog-overlay";
 
-    const defaultComment = (cachedDefaultReason || "Late mark regularization (${mins}m late on ${date}) - Swipe missed")
-      .replace(/\${mins}/g, String(lateMinutes))
-      .replace(/\${date}/g, String(rawDate))
-      .replace(/\${late}/g, String(rawLate));
+    const defaultComment = applyTemplate(cachedDefaultReason, rowData);
+    const safe = {
+      date: esc(rawDate),
+      late: esc(rawLate),
+      shiftIn: esc(times.shiftIn),
+      shiftOut: esc(times.shiftOut),
+      actualIn: esc(times.actualIn || "--")
+    };
 
     overlay.innerHTML = `
       <div class="sp-dialog-card">
@@ -631,19 +628,19 @@
           <div class="sp-dialog-summary-box">
             <div class="sp-summary-item">
               <span class="sp-summary-label">Date Selected</span>
-              <span class="sp-summary-val" id="spDialogDate">${rawDate}</span>
+              <span class="sp-summary-val" id="spDialogDate">${safe.date}</span>
             </div>
             <div class="sp-summary-item">
               <span class="sp-summary-label">Late Duration</span>
-              <span class="sp-summary-val" style="color: #ea580c;">${rawLate} (${lateMinutes} mins)</span>
+              <span class="sp-summary-val" style="color: #ea580c;">${safe.late} (${lateMinutes} mins)</span>
             </div>
             <div class="sp-summary-item">
               <span class="sp-summary-label">Shift Hours</span>
-              <span class="sp-summary-val">${times.shiftIn} - ${times.shiftOut}</span>
+              <span class="sp-summary-val">${safe.shiftIn} - ${safe.shiftOut}</span>
             </div>
             <div class="sp-summary-item">
               <span class="sp-summary-label">Punched In At</span>
-              <span class="sp-summary-val">${times.actualIn || "--"}</span>
+              <span class="sp-summary-val">${safe.actualIn}</span>
             </div>
           </div>
 
@@ -653,11 +650,11 @@
             <div class="sp-type-pill-group" id="spTypePills">
               <label class="sp-type-pill active">
                 <input type="radio" name="spSwipeType" value="IN" checked>
-                <span>In Swipe (${times.shiftIn})</span>
+                <span>In Swipe (${safe.shiftIn})</span>
               </label>
               <label class="sp-type-pill">
                 <input type="radio" name="spSwipeType" value="OUT">
-                <span>Out Swipe (${times.shiftOut})</span>
+                <span>Out Swipe (${safe.shiftOut})</span>
               </label>
               <label class="sp-type-pill">
                 <input type="radio" name="spSwipeType" value="BOTH">
@@ -673,7 +670,7 @@
           <!-- Comment / Reason -->
           <div class="sp-dialog-field">
             <label class="sp-field-label" for="spDialogComment">Comment / Reason to Add:</label>
-            <textarea id="spDialogComment" class="sp-dialog-textarea" rows="2" placeholder="Enter reason for regularization...">${defaultComment}</textarea>
+            <textarea id="spDialogComment" class="sp-dialog-textarea" rows="2" placeholder="Enter reason for regularization...">${esc(defaultComment)}</textarea>
             <div class="sp-field-hint">You can freely edit or type your remarks before redirecting.</div>
           </div>
 
@@ -684,7 +681,7 @@
               type="text" 
               id="spApplySwipeUrlInput" 
               class="sp-dialog-input" 
-              value="${cachedApplySwipeUrl || ''}" 
+              value="${esc(cachedApplySwipeUrl)}" 
               placeholder="Paste your portal's Apply Swipe URL (e.g. https://.../SwipeRequestList.aspx?mnusr=...)"
             >
             <div class="sp-field-hint">Paste your portal's Apply Swipe URL. Saved automatically and reused for all future requests.</div>
@@ -721,12 +718,12 @@
       const selectedType = overlay.querySelector('input[name="spSwipeType"]:checked')?.value || "IN";
       const comment = overlay.querySelector("#spDialogComment")?.value || "";
       const text = `Date: ${rawDate}\nLate: ${rawLate} (${lateMinutes}m)\nSwipe Type: ${selectedType}\nComment: ${comment}`;
-      try {
-        navigator.clipboard.writeText(text);
-        showToast("✓ Details copied to clipboard!", "success");
-      } catch (_) {
-        showToast("✓ Copied!", "success");
-      }
+      Promise.resolve()
+        .then(() => navigator.clipboard.writeText(text))
+        .then(
+          () => showToast("✓ Details copied to clipboard!", "success"),
+          () => showToast("Couldn't access the clipboard. Copy the details manually.", "warning")
+        );
     });
 
     // Redirect & Auto-Fill Button
@@ -748,16 +745,14 @@
       };
 
       try {
-        sessionStorage.setItem("spine_pending_swipe", JSON.stringify(payload));
+        sessionStorage.setItem(PENDING_SWIPE_KEY, JSON.stringify(payload));
       } catch (_) {}
-      if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
-        chrome.storage.local.set({ spine_pending_swipe: payload });
-      }
+      storageArea("local")?.set({ [PENDING_SWIPE_KEY]: payload });
 
       // Check if native modal is already present or opened via row
       const nativeBtn = findNativeSwipeTrigger(tr);
       if (nativeBtn) {
-        showToast(`Opening Apply Swipe for <strong>${rawDate}</strong>...`, "info");
+        showToast(`Opening Apply Swipe for <strong>${safe.date}</strong>...`, "info");
         closeDialog();
         nativeBtn.click();
         watchAndAutoFillModal();
@@ -779,18 +774,12 @@
 
       // Save user-provided URL to storage for future clicks
       cachedApplySwipeUrl = targetUrl;
-      if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.sync) {
-        chrome.storage.sync.set({ spine_apply_swipe_url: targetUrl });
-      }
+      storageArea("sync")?.set({ spine_apply_swipe_url: targetUrl });
 
-      showToast(`Redirecting to Apply Swipe for <strong>${rawDate}</strong>...`, "info");
+      showToast(`Redirecting to Apply Swipe for <strong>${safe.date}</strong>...`, "info");
       closeDialog();
       window.location.href = targetUrl;
     });
-  }
-
-  function executeApplySwipe(rowData) {
-    openApplySwipeDialog(rowData);
   }
 
   function findNativeSwipeTrigger(tr) {
@@ -832,10 +821,7 @@
   function fillModalForm(modal, context) {
     if (!modal || !context) return false;
     let filledCount = 0;
-    const reasonText = context.comment || (cachedDefaultReason || "Late mark regularization (${mins}m late) - Swipe missed")
-      .replace(/\${mins}/g, String(context.lateMinutes))
-      .replace(/\${date}/g, String(context.rawDate))
-      .replace(/\${late}/g, String(context.rawLate));
+    const reasonText = context.comment || applyTemplate(cachedDefaultReason, context);
 
     const textFields = Array.from(modal.querySelectorAll("textarea, input[type='text'], input:not([type])"));
     for (const field of textFields) {
@@ -895,10 +881,12 @@
         clearInterval(timer);
         let pending = null;
         try {
-          pending = JSON.parse(sessionStorage.getItem("spine_pending_swipe"));
+          pending = JSON.parse(sessionStorage.getItem(PENDING_SWIPE_KEY));
         } catch (_) {}
-        fillModalForm(modal, pending || {});
-        showToast("✓ Auto-filled swipe details!", "success");
+        if (fillModalForm(modal, pending || {})) {
+          clearPendingSwipe(); // consumed here, so the redirect page must not fill it again
+          showToast("✓ Auto-filled swipe details!", "success");
+        }
         return;
       }
 
@@ -977,6 +965,26 @@
     return null;
   }
 
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+  function formatSpineDate(rawDate) {
+    const m = String(rawDate).match(/(\d{1,2})[-/ .]?([A-Za-z]{3,9}|\d{1,2})[-/ .]?(\d{2,4})/);
+    if (!m) return norm(rawDate);
+
+    let mon = m[2];
+    if (/^\d+$/.test(mon)) {
+      const idx = parseInt(mon, 10) - 1;
+      if (idx < 0 || idx > 11) return norm(rawDate);
+      mon = MONTHS[idx];
+    } else {
+      mon = mon.charAt(0).toUpperCase() + mon.slice(1, 3).toLowerCase();
+    }
+
+    const day = m[1].padStart(2, "0");
+    const yr = m[3].length === 4 ? m[3].slice(2) : m[3];
+    return `${day}-${mon}-${yr}`;
+  }
+
   function tryFillApplySwipeForm(payload) {
     if (!payload || !payload.rawDate) return false;
 
@@ -998,15 +1006,8 @@
       return false;
     }
 
-    // 2. Set Request Date (format: "26-Oct-26")
-    const dMatch = payload.rawDate.match(/(\d{1,2})[-/ ]?([A-Za-z]{3}|\d{1,2})[-/ ]?(\d{2,4})/);
-    let day = "26", mon = "Oct", yr = "26";
-    if (dMatch) {
-      day = String(dMatch[1]).padStart(2, "0");
-      mon = dMatch[2];
-      yr = dMatch[3].length === 4 ? dMatch[3].slice(2) : dMatch[3];
-    }
-    const formattedDate = `${day}-${mon}-${yr}`; // Matches Spine's exact "31-Oct-26" format!
+    // 2. Set Request Date in Spine's "31-Oct-26" format; keep the raw text if it can't be parsed
+    const formattedDate = formatSpineDate(payload.rawDate);
 
     if (dateInput.value !== formattedDate) {
       dateInput.value = formattedDate;
@@ -1087,7 +1088,7 @@
       document.querySelector("textarea[id*='Reason' i], textarea[id*='Remarks' i], textarea");
 
     if (reasonTextarea) {
-      const targetComment = payload.comment || `Late mark regularization (${payload.lateMinutes}m late on ${payload.rawDate}) - Swipe missed`;
+      const targetComment = payload.comment || applyTemplate(cachedDefaultReason, payload);
       if (!reasonTextarea.value || reasonTextarea.dataset.spineAutofilled) {
         reasonTextarea.value = targetComment;
         reasonTextarea.dataset.spineAutofilled = "true";
@@ -1105,7 +1106,7 @@
       banner.innerHTML = `
         <span style="font-size: 24px;">⚡</span>
         <div style="flex: 1;">
-          <strong>Spine Helper Auto-Filled:</strong> Date <strong>${formattedDate}</strong> with <strong>${payload.swipeType} Mode (${payload.swipeTime || ""})</strong> and your remarks! Please review and click <strong>Save</strong>.
+          <strong>Spine Helper Auto-Filled:</strong> Date <strong>${esc(formattedDate)}</strong> with <strong>${esc(payload.swipeType)} Mode (${esc(payload.swipeTime || "")})</strong> and your remarks! Please review and click <strong>Save</strong>.
         </div>
         <button type="button" class="sp-autofill-refill-btn" id="spPageRefillBtn">Re-fill</button>
       `;
@@ -1133,12 +1134,25 @@
     return true;
   }
 
+  // Auto-fill only runs on the swipe request pages, so a pending payload never makes the helper
+  // click "Add"/"Apply" buttons on the attendance page or anywhere else on the portal
+  function isApplySwipePage() {
+    const here = window.location.pathname.toLowerCase();
+    if (here.includes("swipe")) return true;
+    try {
+      return Boolean(cachedApplySwipeUrl) && new URL(cachedApplySwipeUrl, window.location.href).pathname.toLowerCase() === here;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function processPendingSwipeOnPage(payload) {
     if (!payload || !payload.rawDate) return;
-    if (Date.now() - (payload.timestamp || 0) > 15 * 60 * 1000) {
-      sessionStorage.removeItem("spine_pending_swipe");
+    if (Date.now() - (payload.timestamp || 0) > PENDING_SWIPE_TTL_MS) {
+      clearPendingSwipe();
       return;
     }
+    if (!isApplySwipePage()) return;
 
     let attempts = 0;
     const maxAttempts = 15;
@@ -1149,11 +1163,8 @@
       if (isFilled || attempts >= maxAttempts) {
         clearInterval(fillTimer);
         if (isFilled) {
-          sessionStorage.removeItem("spine_pending_swipe");
-          if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
-            chrome.storage.local.remove("spine_pending_swipe");
-          }
-          showToast(`✓ Auto-filled swipe for <strong>${payload.rawDate}</strong>!`, "success");
+          clearPendingSwipe();
+          showToast(`✓ Auto-filled swipe for <strong>${esc(payload.rawDate)}</strong>!`, "success");
         }
       }
     }, 350);
@@ -1162,17 +1173,15 @@
   function checkAndFillApplySwipePage() {
     let pendingRaw = null;
     try {
-      pendingRaw = sessionStorage.getItem("spine_pending_swipe");
+      pendingRaw = sessionStorage.getItem(PENDING_SWIPE_KEY);
     } catch (_) {}
 
     if (!pendingRaw) {
-      if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
-        chrome.storage.local.get({ spine_pending_swipe: null }, (res) => {
-          if (res.spine_pending_swipe) {
-            processPendingSwipeOnPage(res.spine_pending_swipe);
-          }
-        });
-      }
+      storageArea("local")?.get({ [PENDING_SWIPE_KEY]: null }, (res) => {
+        if (res[PENDING_SWIPE_KEY]) {
+          processPendingSwipeOnPage(res[PENDING_SWIPE_KEY]);
+        }
+      });
       return;
     }
 
@@ -1182,6 +1191,16 @@
     } catch (_) {}
   }
 
+  function clearLateMarkers(root) {
+    root.querySelectorAll(".sp-apply-swipe-tag, .sp-date-swipe-pill").forEach(el => el.remove());
+    root.querySelectorAll(".spine-late-cell-marker, .sp-covered-by-grace").forEach(el => {
+      el.classList.remove("spine-late-cell-marker", "sp-covered-by-grace");
+      el.removeAttribute("title");
+      el.onclick = null;
+    });
+    root.querySelectorAll(".sp-late-row-highlight").forEach(el => el.classList.remove("sp-late-row-highlight"));
+  }
+
   function renderLateHoursTracker() {
     const tableInfo = findAttendanceTableAndColumns();
     if (!tableInfo) return;
@@ -1189,19 +1208,7 @@
     const { table, lateColIndex, dateColIndex, dateRows } = tableInfo;
 
     // 1. Clean up any previous markers
-    table.querySelectorAll(".spine-late-cell-marker").forEach(el => {
-      el.classList.remove("spine-late-cell-marker");
-      el.removeAttribute("title");
-    });
-    table.querySelectorAll(".sp-apply-swipe-tag").forEach(el => el.remove());
-    table.querySelectorAll(".sp-date-swipe-pill").forEach(el => el.remove());
-    table.querySelectorAll(".sp-late-row-highlight").forEach(el => {
-      el.classList.remove("sp-late-row-highlight");
-    });
-    table.querySelectorAll(".sp-covered-by-grace").forEach(el => {
-      el.classList.remove("sp-covered-by-grace");
-      el.removeAttribute("title");
-    });
+    clearLateMarkers(table);
 
     // 2. Extract valid data rows
     const dataRows = [];
@@ -1262,20 +1269,18 @@
         const onSwipeClick = (e) => {
           e.preventDefault();
           e.stopPropagation();
-          executeApplySwipe(row);
+          openApplySwipeDialog(row);
         };
         row.lateCell.onclick = onSwipeClick;
 
-        // Add "Apply Swipe" tag inside cell
-        if (!row.lateCell.querySelector(".sp-apply-swipe-tag")) {
-          const tag = document.createElement("span");
-          tag.className = "sp-apply-swipe-tag";
-          tag.textContent = "Apply Swipe";
-          row.lateCell.appendChild(tag);
-        }
+        // Add "Apply Swipe" tag inside cell (previous markers were cleared above)
+        const tag = document.createElement("span");
+        tag.className = "sp-apply-swipe-tag";
+        tag.textContent = "Apply Swipe";
+        row.lateCell.appendChild(tag);
 
         // Add "⚡ Apply Swipe" pill in Date column
-        if (row.dateCell && !row.dateCell.querySelector(".sp-date-swipe-pill")) {
+        if (row.dateCell) {
           const pill = document.createElement("button");
           pill.type = "button";
           pill.className = "sp-date-swipe-pill";
@@ -1283,9 +1288,6 @@
           pill.title = `Click to Apply Swipe for ${row.rawDate || "this date"} (${row.rawLate})`;
           pill.onclick = onSwipeClick;
           row.dateCell.appendChild(pill);
-        } else if (row.dateCell) {
-          const pill = row.dateCell.querySelector(".sp-date-swipe-pill");
-          if (pill) pill.onclick = onSwipeClick;
         }
 
         // Highlight Row
@@ -1311,8 +1313,9 @@
     }
 
     if (totalLateMinutes > ALLOWED_GRACE_MINUTES) {
-      const markedListStr = Array.from(markedRows)
-        .map(r => `<button type="button" class="sp-banner-badge sp-banner-btn" data-date="${r.rawDate}" title="Click to apply swipe for ${r.rawDate} (${r.rawLate})">⚡ ${r.rawDate}: ${r.rawLate}</button>`)
+      const markedList = Array.from(markedRows);
+      const markedListStr = markedList
+        .map((r, i) => `<button type="button" class="sp-banner-badge sp-banner-btn" data-idx="${i}" title="Click to apply swipe for ${esc(r.rawDate)} (${esc(r.rawLate)})">⚡ ${esc(r.rawDate)}: ${esc(r.rawLate)}</button>`)
         .join(" ");
       const excessMins = totalLateMinutes - ALLOWED_GRACE_MINUTES;
 
@@ -1332,11 +1335,10 @@
         btn.onclick = (e) => {
           e.preventDefault();
           e.stopPropagation();
-          const targetDate = btn.dataset.date;
-          const targetRow = dataRows.find(r => r.rawDate === targetDate);
+          const targetRow = markedList[Number(btn.dataset.idx)];
           if (targetRow) {
             targetRow.tr.scrollIntoView({ behavior: "smooth", block: "center" });
-            executeApplySwipe(targetRow);
+            openApplySwipeDialog(targetRow);
           }
         };
       });
@@ -1362,7 +1364,20 @@
       renderLateHoursTracker();
     } catch (err) {
       console.error("Spine Helper Render Error:", err);
+    } finally {
+      // Drop the mutations this render just caused (markers on page cells, panel text),
+      // otherwise the observer would schedule another render and loop forever
+      activeMutationObserver?.takeRecords();
     }
+  }
+
+  function isOwnMutation(m) {
+    const el = m.target.nodeType === Node.ELEMENT_NODE ? m.target : m.target.parentElement;
+    if (el?.closest(OWN_NODE_SELECTOR)) return true;
+    if (m.type !== "childList") return false;
+
+    const nodes = [...m.addedNodes, ...m.removedNodes];
+    return nodes.length > 0 && nodes.every(n => n.nodeType === Node.ELEMENT_NODE && n.matches(OWN_NODE_SELECTOR));
   }
 
   function scheduleRender() {
@@ -1374,18 +1389,9 @@
     if (observerStarted) return;
     observerStarted = true;
 
+    // Re-render only when the page itself changed, not when one of our own nodes did
     activeMutationObserver = new MutationObserver((mutations) => {
-      for (const m of mutations) {
-        if (
-          m.target.id === PUNCH_PANEL_ID ||
-          m.target.id === LATE_BANNER_ID ||
-          m.target.closest?.(`#${PUNCH_PANEL_ID}`) ||
-          m.target.closest?.(`#${LATE_BANNER_ID}`)
-        ) {
-          return;
-        }
-      }
-      scheduleRender();
+      if (mutations.some(m => !isOwnMutation(m))) scheduleRender();
     });
 
     activeMutationObserver.observe(document.body, {
@@ -1420,14 +1426,13 @@
     observerStarted = false;
     clearTimeout(renderTimer);
     clearInterval(tickInterval);
+    latestPunchResult = null;
     window.removeEventListener("load", scheduleRender);
     document.removeEventListener("click", onWindowClick);
-    document.getElementById(PUNCH_PANEL_ID)?.remove();
-    document.getElementById(LATE_BANNER_ID)?.remove();
-    document.querySelectorAll(".spine-late-cell-marker, .sp-late-row-highlight, .sp-covered-by-grace").forEach((el) => {
-      el.classList.remove("spine-late-cell-marker", "sp-late-row-highlight", "sp-covered-by-grace");
-    });
-    document.querySelectorAll(".sp-date-swipe-pill").forEach((el) => el.remove());
+    for (const id of [PUNCH_PANEL_ID, LATE_BANNER_ID, "spine-toast", "spine-apply-swipe-dialog-overlay"]) {
+      document.getElementById(id)?.remove();
+    }
+    clearLateMarkers(document);
     isRunning = false;
   }
 

@@ -29,28 +29,20 @@
   /* ==========================================================================
      Storage Helpers
      ========================================================================== */
+  const STORAGE_DEFAULTS = {
+    spine_allowed_patterns: DEFAULT_SITES,
+    spine_global_active: false,
+    spine_default_reason: "",
+    spine_apply_swipe_url: ""
+  };
+
   function getStorageData() {
     return new Promise((resolve) => {
       if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.sync) {
-        resolve({
-          spine_allowed_patterns: DEFAULT_SITES,
-          spine_global_active: false,
-          spine_default_reason: "",
-          spine_apply_swipe_url: ""
-        });
+        resolve({ ...STORAGE_DEFAULTS });
         return;
       }
-      chrome.storage.sync.get(
-        {
-          spine_allowed_patterns: DEFAULT_SITES,
-          spine_global_active: false,
-          spine_default_reason: "",
-          spine_apply_swipe_url: ""
-        },
-        (items) => {
-          resolve(items);
-        }
-      );
+      chrome.storage.sync.get(STORAGE_DEFAULTS, resolve);
     });
   }
 
@@ -219,12 +211,8 @@
     const isMatch = window.SpineUrlMatcher.isMatch(currentTabUrl, allowedPatterns, false);
 
     if (isMatch) {
-      // Remove matching patterns or current host
-      const cleanedHost = currentTabHost.toLowerCase();
-      allowedPatterns = allowedPatterns.filter((p) => {
-        const cleanedPattern = p.toLowerCase();
-        return cleanedPattern !== cleanedHost && !window.SpineUrlMatcher.isMatch(currentTabUrl, [p], false);
-      });
+      // Remove every pattern that matches the current page (the bare host is one of them)
+      allowedPatterns = allowedPatterns.filter((p) => !window.SpineUrlMatcher.isMatch(currentTabUrl, [p], false));
       await setStorageData({ spine_allowed_patterns: allowedPatterns });
       showHint(`Disabled on ${currentTabHost}`, false);
     } else {
