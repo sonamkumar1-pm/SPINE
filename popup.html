@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SPINE Hours Helper Settings</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <!-- Header -->
+    <header class="popup-header">
+      <div class="header-brand">
+        <div class="logo-box">
+          <img src="icons/icon48.png" alt="Spine Logo" class="brand-logo" id="brandLogo">
+        </div>
+        <div class="header-titles">
+          <h1>SPINE Helper</h1>
+          <span class="subtitle">Attendance Hours & Late Optimizer</span>
+        </div>
+      </div>
+      <span class="version-tag">v1.2</span>
+    </header>
+
+    <!-- Active Tab Context Card -->
+    <section class="current-site-card" id="currentSiteCard">
+      <div class="site-card-header">
+        <span class="card-caption">CURRENT WEBSITE</span>
+        <span class="status-pill" id="siteStatusPill">
+          <span class="dot"></span>
+          <span id="siteStatusText">Checking...</span>
+        </span>
+      </div>
+      <div class="site-card-body">
+        <div class="site-info">
+          <span class="site-icon">🌐</span>
+          <span class="site-hostname" id="currentHost" title="Current page host">detecting...</span>
+        </div>
+        <button id="toggleCurrentBtn" class="btn btn-primary" disabled>
+          <span class="btn-icon">⚡</span>
+          <span id="toggleCurrentBtnText">Enable on this site</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Add Custom URL / Pattern Section -->
+    <section class="section-add">
+      <label for="urlInput" class="section-title">Add Website or Domain</label>
+      <div class="input-group">
+        <input 
+          type="text" 
+          id="urlInput" 
+          placeholder="e.g. https://example.com or example.com" 
+          autocomplete="off"
+          spellcheck="false"
+        >
+        <button id="addUrlBtn" class="btn btn-action">
+          <span>+ Add</span>
+        </button>
+      </div>
+      <div class="input-hint" id="inputHint">Supports domains (example.com) or wildcards (*.example.com)</div>
+    </section>
+
+    <!-- Allowed URLs List -->
+    <section class="section-list">
+      <div class="list-header">
+        <span class="section-title">Active Sites <span class="badge-count" id="siteCount">0</span></span>
+        <button id="resetDefaultsBtn" class="btn-link" title="Reset to default HRMS URL">Default</button>
+      </div>
+      <div class="sites-list" id="sitesList">
+        <!-- Injected dynamically via popup.js -->
+      </div>
+    </section>
+
+    <!-- Swipe Regularization Preferences -->
+    <section class="section-settings">
+      <div class="settings-title-row">
+        <span class="section-title">⚡ Regularization Auto-Fill</span>
+      </div>
+      <div class="setting-field">
+        <label for="defaultReasonInput" class="setting-label">Default Reason / Remarks</label>
+        <input 
+          type="text" 
+          id="defaultReasonInput" 
+          placeholder="Late mark regularization (${mins}m late) - Swipe missed"
+          class="setting-input"
+          autocomplete="off"
+        >
+        <div class="input-hint">Use <code>\${mins}</code> or <code>\${date}</code> for dynamic values</div>
+      </div>
+      <div class="setting-field" style="margin-top: 6px;">
+        <label for="applySwipeUrlInput" class="setting-label">Apply Swipe Page URL</label>
+        <input 
+          type="text" 
+          id="applySwipeUrlInput" 
+          placeholder="Paste Apply Swipe URL (e.g. https://.../SwipeRequestList.aspx?mnusr=...)"
+          class="setting-input"
+          autocomplete="off"
+        >
+        <div class="input-hint">The page URL to open when applying swipe regularization</div>
+      </div>
+    </section>
+
+    <!-- Global Mode Toggle -->
+    <section class="section-global">
+      <div class="global-toggle-row">
+        <div class="toggle-info">
+          <span class="toggle-title">Active Everywhere</span>
+          <span class="toggle-desc">Run on all websites (<all_urls>)</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="globalToggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="popup-footer">
+      <span class="footer-status" id="saveStatus">✓ Settings saved automatically</span>
+    </footer>
+  </div>
+
+  <script src="url-matcher.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

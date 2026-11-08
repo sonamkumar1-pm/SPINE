@@ -1,16 +1,33 @@
 (() => {
   "use strict";
 
-  const PANEL_ID = "spine-punch-hours-summary";
-  const STYLE_ID = "spine-punch-hours-style";
+  /* ==========================================================================
+     Constants
+     ========================================================================== */
+  const PUNCH_PANEL_ID = "spine-punch-hours-summary";
+  const LATE_BANNER_ID = "spine-late-banner";
+  const ALLOWED_GRACE_MINUTES = 45;
 
   let renderTimer = null;
   let tickInterval = null;
   let observerStarted = false;
-  let latestResult = null;
+  let activeMutationObserver = null;
+  let isRunning = false;
+  let latestPunchResult = null;
 
+  /* ==========================================================================
+     Formatting & Parsing Utilities
+     ========================================================================== */
   function norm(v) {
     return (v || "").replace(/\s+/g, " ").trim();
+  }
+
+  function fmt(mins) {
+    const total = Math.max(0, Math.floor(Number(mins) || 0));
+    const h = Math.floor(total / 60);
+    const m = total % 60;
+    if (h === 0) return `${m}m`;
+    return `${h}h ${m}m`;
   }
 
   function parseMinutes(timeStr) {
@@ -42,98 +59,60 @@
     return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")} ${mer}`;
   }
 
-  function fmt(mins) {
-    const total = Math.max(0, Math.floor(Number(mins) || 0));
-    const h = Math.floor(total / 60);
-    const m = total % 60;
-    return `${h}h ${m}m`;
+  /* Universal Late HRS Parser */
+  function parseLateValueToMinutes(raw) {
+    if (raw == null) return 0;
+    const s = String(raw).replace(/\s+/g, " ").trim();
+    if (!s || s === "-" || s === "--" || s === "N/A" || s === "nil" || s === "0" || s === "0.00" || s === "00:00" || s === "0:00") {
+      return 0;
+    }
+
+    // Text format "1h 20m", "45m", "20 mins"
+    const textMatch = s.match(/(?:(\d+)\s*h(?:rs?|ours?)?)?\s*(?:(\d+)\s*m(?:ins?|inutes?)?)?/i);
+    if (textMatch && (textMatch[1] || textMatch[2])) {
+      const h = parseInt(textMatch[1] || "0", 10);
+      const m = parseInt(textMatch[2] || "0", 10);
+      if (h > 0 || m > 0) return h * 60 + m;
+    }
+
+    // Colon format "00:21", "1:15"
+    const colonMatch = s.match(/^(\d{1,2}):(\d{2})$/);
+    if (colonMatch) {
+      return parseInt(colonMatch[1], 10) * 60 + parseInt(colonMatch[2], 10);
+    }
+
+    // Dot format "0.21" -> 21m, "0.06" -> 6m, "1.15" -> 75m, "3.01" -> 181m
+    const dotTwoMatch = s.match(/^(\d+)\.(\d{2})$/);
+    if (dotTwoMatch) {
+      const h = parseInt(dotTwoMatch[1], 10);
+      const m = parseInt(dotTwoMatch[2], 10);
+      if (m < 60) return h * 60 + m;
+      return Math.round((h + m / 100) * 60);
+    }
+
+    // Single decimal "0.5" -> 30m
+    const dotOneMatch = s.match(/^(\d+)\.(\d{1})$/);
+    if (dotOneMatch) {
+      return Math.round(parseFloat(s) * 60);
+    }
+
+    // Arbitrary float
+    if (/^\d+\.\d+$/.test(s)) {
+      return Math.round(parseFloat(s) * 60);
+    }
+
+    // Plain integer "21" -> 21m
+    const intMatch = s.match(/^(\d+)$/);
+    if (intMatch) {
+      return parseInt(intMatch[1], 10);
+    }
+
+    return 0;
   }
 
-  function ensureStyles() {
-    if (document.getElementById(STYLE_ID)) return;
-
-    const style = document.createElement("style");
-    style.id = STYLE_ID;
-    style.textContent = `
-      #${PANEL_ID} {
-        margin: 10px 0 12px 0;
-        width: 100%;
-        box-sizing: border-box;
-      }
-      #${PANEL_ID} .sp-card {
-        background: #eef7ff;
-        border: 1px solid #c8dced;
-        border-radius: 8px;
-        padding: 12px;
-        font-family: Arial, sans-serif;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-      }
-      #${PANEL_ID} .sp-title {
-        font-size: 16px;
-        font-weight: 700;
-        color: #234861;
-        margin-bottom: 10px;
-      }
-      #${PANEL_ID} .sp-grid {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(150px, 1fr));
-        gap: 10px;
-        margin-bottom: 8px;
-      }
-      #${PANEL_ID} .sp-box {
-        background: #ffffff;
-        border: 1px solid #dce6ef;
-        border-radius: 6px;
-        padding: 10px;
-      }
-      #${PANEL_ID} .sp-label {
-        font-size: 12px;
-        color: #617284;
-        margin-bottom: 4px;
-      }
-      #${PANEL_ID} .sp-value {
-        font-size: 22px;
-        font-weight: 700;
-        color: #0a517d;
-      }
-      #${PANEL_ID} .sp-value.small {
-        font-size: 18px;
-      }
-      #${PANEL_ID} .sp-meta,
-      #${PANEL_ID} .sp-line {
-        font-size: 12px;
-        color: #48596a;
-      }
-      #${PANEL_ID} .sp-line {
-        padding: 4px 0;
-        border-bottom: 1px dashed #dfe6ec;
-      }
-      #${PANEL_ID} .sp-warning {
-        color: #a13d3d;
-      }
-      #${PANEL_ID} .sp-good {
-        color: #1f8a43 !important;
-      }
-      #${PANEL_ID} .sp-bad {
-        color: #c0392b !important;
-      }
-      #${PANEL_ID} .sp-sub {
-        margin-top: 4px;
-        font-size: 12px;
-        font-weight: 600;
-      }
-      #${PANEL_ID} details {
-        margin-top: 8px;
-      }
-      #${PANEL_ID} summary {
-        cursor: pointer;
-        color: #0a517d;
-        font-weight: 600;
-      }
-    `;
-    document.head.appendChild(style);
-  }
-
+  /* ==========================================================================
+     FEATURE 1: Daily Punch Summary Panel (Purana In/Out Flow)
+     ========================================================================== */
   function getHeaderCells(table) {
     const headerRow = table.querySelector("tr");
     if (!headerRow) return [];
@@ -177,7 +156,7 @@
     return null;
   }
 
-  function extractRows(table) {
+  function extractPunchRows(table) {
     const rows = [];
     const trList = Array.from(table.querySelectorAll("tr"));
 
@@ -195,9 +174,8 @@
     return rows;
   }
 
-  function uniqueRows(rows) {
+  function uniquePunchRows(rows) {
     const seen = new Set();
-
     return rows.filter(row => {
       const key = `${row.date}|${row.entryTime}|${row.dir}`;
       if (seen.has(key)) return false;
@@ -206,8 +184,8 @@
     });
   }
 
-  function calculate(rows) {
-    const cleanRows = uniqueRows(rows);
+  function calculatePunch(rows) {
+    const cleanRows = uniquePunchRows(rows);
 
     const result = {
       inMinutes: 0,
@@ -288,12 +266,12 @@
     return result;
   }
 
-  function ensurePanel() {
-    let panel = document.getElementById(PANEL_ID);
+  function ensurePunchPanel() {
+    let panel = document.getElementById(PUNCH_PANEL_ID);
     if (panel) return panel;
 
     panel = document.createElement("div");
-    panel.id = PANEL_ID;
+    panel.id = PUNCH_PANEL_ID;
     panel.innerHTML = `
       <div class="sp-card">
         <div class="sp-title">Attendance Hours Summary</div>
@@ -368,60 +346,53 @@
     }
   }
 
-  function render() {
-    try {
-      ensureStyles();
+  function renderPunchSummary() {
+    const table = findPunchTable();
+    if (!table) return;
 
-      const table = findPunchTable();
-      if (!table) return;
-
-      const panel = ensurePanel();
-
-      if (panel.parentElement !== table.parentElement) {
-        panel.remove();
-        table.parentElement.insertBefore(panel, table);
-      }
-
-      const rows = extractRows(table);
-      const result = calculate(rows);
-      latestResult = result;
-
-      const inEl = panel.querySelector('[data-role="in"]');
-      const outEl = panel.querySelector('[data-role="out"]');
-      const openInEl = panel.querySelector('[data-role="open-in"]');
-      const totalOpenEl = panel.querySelector('[data-role="total-open"]');
-      const rowsEl = panel.querySelector('[data-role="rows"]');
-      const metaEl = panel.querySelector('[data-role="meta"]');
-      const detailsEl = panel.querySelector('[data-role="details"]');
-      const warningsEl = panel.querySelector('[data-role="warnings"]');
-
-      if (inEl) inEl.textContent = fmt(result.inMinutes);
-      if (outEl) outEl.textContent = fmt(result.outMinutes);
-      if (openInEl) openInEl.textContent = fmt(result.openInMinutes || 0);
-      if (totalOpenEl) totalOpenEl.textContent = fmt(result.totalInPlusOpen || 0);
-      if (rowsEl) rowsEl.textContent = `${result.rawCount} / ${result.uniqueCount}`;
-
-      if (metaEl) {
-        metaEl.textContent = `Rows found: ${result.rawCount}, unique rows used: ${result.uniqueCount}`;
-      }
-
-      if (detailsEl) {
-        detailsEl.innerHTML = result.details.length
-          ? result.details.map(line => `<div class="sp-line">${line}</div>`).join("")
-          : `<div class="sp-line">No valid sessions found.</div>`;
-      }
-
-      if (warningsEl) {
-        warningsEl.innerHTML = result.warnings.length
-          ? result.warnings.map(line => `<div class="sp-line sp-warning">${line}</div>`).join("")
-          : `<div class="sp-line">No warnings.</div>`;
-      }
-
-      updateCompletionUI(panel, result);
-      startTicking(panel);
-    } catch (err) {
-      console.error("Spine punch summary error", err);
+    const panel = ensurePunchPanel();
+    if (panel.parentElement !== table.parentElement) {
+      panel.remove();
+      table.parentElement.insertBefore(panel, table);
     }
+
+    const rows = extractPunchRows(table);
+    const result = calculatePunch(rows);
+    latestPunchResult = result;
+
+    const inEl = panel.querySelector('[data-role="in"]');
+    const outEl = panel.querySelector('[data-role="out"]');
+    const openInEl = panel.querySelector('[data-role="open-in"]');
+    const totalOpenEl = panel.querySelector('[data-role="total-open"]');
+    const rowsEl = panel.querySelector('[data-role="rows"]');
+    const metaEl = panel.querySelector('[data-role="meta"]');
+    const detailsEl = panel.querySelector('[data-role="details"]');
+    const warningsEl = panel.querySelector('[data-role="warnings"]');
+
+    if (inEl) inEl.textContent = fmt(result.inMinutes);
+    if (outEl) outEl.textContent = fmt(result.outMinutes);
+    if (openInEl) openInEl.textContent = fmt(result.openInMinutes || 0);
+    if (totalOpenEl) totalOpenEl.textContent = fmt(result.totalInPlusOpen || 0);
+    if (rowsEl) rowsEl.textContent = `${result.rawCount} / ${result.uniqueCount}`;
+
+    if (metaEl) {
+      metaEl.textContent = `Rows found: ${result.rawCount}, unique rows used: ${result.uniqueCount}`;
+    }
+
+    if (detailsEl) {
+      detailsEl.innerHTML = result.details.length
+        ? result.details.map(line => `<div class="sp-line">${line}</div>`).join("")
+        : `<div class="sp-line">No valid sessions found.</div>`;
+    }
+
+    if (warningsEl) {
+      warningsEl.innerHTML = result.warnings.length
+        ? result.warnings.map(line => `<div class="sp-line sp-warning">${line}</div>`).join("")
+        : `<div class="sp-line">No warnings.</div>`;
+    }
+
+    updateCompletionUI(panel, result);
+    startTicking(panel);
   }
 
   function startTicking(panel) {
@@ -431,27 +402,967 @@
     }
 
     tickInterval = setInterval(() => {
-      if (!latestResult || !document.getElementById(PANEL_ID)) return;
+      if (!latestPunchResult || !document.getElementById(PUNCH_PANEL_ID)) return;
 
       const openInEl = panel.querySelector('[data-role="open-in"]');
       const totalOpenEl = panel.querySelector('[data-role="total-open"]');
 
-      if (latestResult.lastOpenInTime) {
-        const openStart = parseMinutes(latestResult.lastOpenInTime);
+      if (latestPunchResult.lastOpenInTime) {
+        const openStart = parseMinutes(latestPunchResult.lastOpenInTime);
         const now = new Date();
         const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
         if (openStart != null && nowMinutes >= openStart) {
-          latestResult.openInMinutes = nowMinutes - openStart;
-          latestResult.totalInPlusOpen = latestResult.inMinutes + latestResult.openInMinutes;
+          latestPunchResult.openInMinutes = nowMinutes - openStart;
+          latestPunchResult.totalInPlusOpen = latestPunchResult.inMinutes + latestPunchResult.openInMinutes;
 
-          if (openInEl) openInEl.textContent = fmt(latestResult.openInMinutes);
-          if (totalOpenEl) totalOpenEl.textContent = fmt(latestResult.totalInPlusOpen);
+          if (openInEl) openInEl.textContent = fmt(latestPunchResult.openInMinutes);
+          if (totalOpenEl) totalOpenEl.textContent = fmt(latestPunchResult.totalInPlusOpen);
         }
       }
 
-      updateCompletionUI(panel, latestResult);
+      updateCompletionUI(panel, latestPunchResult);
     }, 1000);
+  }
+
+  /* ==========================================================================
+     FEATURE 2: Late Hours Detection & Greedy Highlighting
+     ========================================================================== */
+
+  // Helper: Detect if a <tr> is a valid daily attendance row (starts with a date like 01-Oct-26, Mon 01/10/2026, etc.)
+  function isDateRow(tr, dateColIdx) {
+    const dateCell = tr.cells[dateColIdx] || tr.cells[0];
+    if (!dateCell) return false;
+    const txt = (dateCell.innerText || "").trim();
+    // Ignore non-data / total rows
+    if (/^(total|sub\s*total|summary|grand\s*total)/i.test(txt)) return false;
+    // Match date formats with or without leading weekday prefixes (e.g. "01-Oct", "Mon, 01-10", "1/10/2026")
+    return /^(?:[a-zA-Z]{3,9},?\s*)?\d{1,2}[-/ .]?[a-zA-Z0-9]*/.test(txt);
+  }
+
+  function findAttendanceTableAndColumns() {
+    const allTables = Array.from(document.querySelectorAll("table"));
+
+    for (const table of allTables) {
+      const rows = Array.from(table.querySelectorAll("tr"));
+      if (rows.length < 5) continue; // Must be a monthly attendance table with multiple rows
+
+      // Check rows for header
+      let headerTr = null;
+      let lateColIndex = -1;
+      let dateColIndex = -1;
+
+      for (let r = 0; r < Math.min(5, rows.length); r++) {
+        const tr = rows[r];
+        const cells = Array.from(tr.querySelectorAll("th, td"));
+
+        for (let c = 0; c < cells.length; c++) {
+          const text = (cells[c].innerText || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+          // Target "Late HRS." column strictly, avoiding "Acc Late Hrs"
+          if (lateColIndex === -1 && text.includes("late") && !text.includes("acc")) {
+            lateColIndex = c;
+          }
+
+          // Target "Date" column
+          if (dateColIndex === -1 && (text === "date" || text.includes("att date") || text === "dt")) {
+            dateColIndex = c;
+          }
+        }
+
+        if (lateColIndex !== -1) {
+          headerTr = tr;
+          break;
+        }
+      }
+
+      // If we found a table with "Late HRS." header and multiple date rows:
+      if (lateColIndex !== -1) {
+        if (dateColIndex === -1) dateColIndex = 0;
+
+        // Verify that data rows actually exist under this table
+        const dateRows = rows.filter(tr => isDateRow(tr, dateColIndex));
+        if (dateRows.length >= 3) {
+          return {
+            table,
+            headerTr,
+            lateColIndex,
+            dateColIndex,
+            dateRows
+          };
+        }
+      }
+    }
+
+    // Secondary scan: Find any table where column 0 has dates and another column has decimal numbers (e.g. 0.21, 0.27)
+    for (const table of allTables) {
+      const rows = Array.from(table.querySelectorAll("tr"));
+      if (rows.length < 10) continue;
+
+      const dateRows = rows.filter(tr => isDateRow(tr, 0));
+      if (dateRows.length < 5) continue;
+
+      // Scan each column index to find the one with decimal time values
+      const sampleRow = dateRows[0];
+      for (let c = 0; c < sampleRow.cells.length; c++) {
+        // Count how many date rows have values matching ^\d+\.\d{2}$ in column c
+        const decimalCount = dateRows.filter(r => {
+          const val = (r.cells[c]?.innerText || "").trim();
+          return /^\d+\.\d{2}$/.test(val);
+        }).length;
+
+        // Check if there are non-zero late values (like 0.21, 0.27)
+        const hasNonZeroLate = dateRows.some(r => {
+          const val = (r.cells[c]?.innerText || "").trim();
+          return val === "0.21" || val === "0.27" || val === "0.24" || val === "0.14" || val === "0.23";
+        });
+
+        if (decimalCount >= dateRows.length * 0.7 && hasNonZeroLate) {
+          console.log(`🎯 [Spine Helper] Verified Late HRS column via content matching at index: ${c}`);
+          return {
+            table,
+            headerTr: null,
+            lateColIndex: c,
+            dateColIndex: 0,
+            dateRows
+          };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /* ==========================================================================
+     FEATURE 3: Apply Swipe Quick Dialog & Redirect Auto-Fill
+     ========================================================================== */
+  let activePendingSwipe = null;
+  let cachedDefaultReason = "Late mark regularization (${mins}m late) - Swipe missed";
+  let cachedApplySwipeUrl = "";
+
+  function showToast(message, type = "info") {
+    let toast = document.getElementById("spine-toast");
+    if (!toast) {
+      toast = document.createElement("div");
+      toast.id = "spine-toast";
+      document.body.appendChild(toast);
+    }
+    toast.className = `spine-toast spine-toast-${type} spine-toast-show`;
+    toast.innerHTML = `<span class="spine-toast-icon">⚡</span><span class="spine-toast-msg">${message}</span>`;
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => {
+      toast.classList.remove("spine-toast-show");
+    }, 4500);
+  }
+
+  function extractRowTimes(tr) {
+    if (!tr) return { shiftIn: "10:30 AM", shiftOut: "07:30 PM", actualIn: "", actualOut: "" };
+    const cells = Array.from(tr.querySelectorAll("td, th")).map(c => norm(c.innerText));
+    const timeRegex = /\b\d{1,2}:\d{2}\s*(?:AM|PM)\b/gi;
+    const foundTimes = [];
+    
+    for (const cell of cells) {
+      const matches = cell.match(timeRegex);
+      if (matches) {
+        matches.forEach(m => foundTimes.push(m.trim()));
+      }
+    }
+
+    return {
+      shiftIn: foundTimes[0] || "10:30 AM",
+      shiftOut: foundTimes[1] || "07:30 PM",
+      actualIn: foundTimes[2] || "",
+      actualOut: foundTimes[3] || ""
+    };
+  }
+
+  function findApplySwipeLink() {
+    const elements = Array.from(document.querySelectorAll("a, button, li[onclick], span[onclick], div[onclick]"));
+    for (const el of elements) {
+      if (el.classList.contains("sp-date-swipe-pill") || el.classList.contains("sp-banner-btn")) continue;
+      
+      const txt = (el.innerText || "").toLowerCase().trim();
+      const href = (el.getAttribute("href") || "").toLowerCase();
+      const title = (el.getAttribute("title") || "").toLowerCase();
+      const onclick = (el.getAttribute("onclick") || "").toLowerCase();
+
+      if (
+        txt === "apply swipe" ||
+        txt === "apply swipe regularization" ||
+        txt.includes("swipe regularization") ||
+        title.includes("apply swipe") ||
+        href.includes("applyswipe") ||
+        href.includes("swiperegularization") ||
+        onclick.includes("applyswipe") ||
+        onclick.includes("swiperegularization")
+      ) {
+        return el;
+      }
+    }
+    return null;
+  }
+
+  function openApplySwipeDialog(rowData) {
+    const { rawDate, rawLate, lateMinutes, tr } = rowData;
+    const times = extractRowTimes(tr);
+
+    document.getElementById("spine-apply-swipe-dialog-overlay")?.remove();
+
+    const overlay = document.createElement("div");
+    overlay.id = "spine-apply-swipe-dialog-overlay";
+    overlay.className = "sp-dialog-overlay";
+
+    const defaultComment = (cachedDefaultReason || "Late mark regularization (${mins}m late on ${date}) - Swipe missed")
+      .replace(/\${mins}/g, String(lateMinutes))
+      .replace(/\${date}/g, String(rawDate))
+      .replace(/\${late}/g, String(rawLate));
+
+    overlay.innerHTML = `
+      <div class="sp-dialog-card">
+        <div class="sp-dialog-header">
+          <div class="sp-dialog-title">
+            <span class="sp-dialog-icon">⚡</span>
+            <span>Apply Swipe Regularization</span>
+          </div>
+          <button type="button" class="sp-dialog-close-btn" id="spDialogClose" title="Close">&times;</button>
+        </div>
+
+        <div class="sp-dialog-body">
+          <div class="sp-dialog-summary-box">
+            <div class="sp-summary-item">
+              <span class="sp-summary-label">Date Selected</span>
+              <span class="sp-summary-val" id="spDialogDate">${rawDate}</span>
+            </div>
+            <div class="sp-summary-item">
+              <span class="sp-summary-label">Late Duration</span>
+              <span class="sp-summary-val" style="color: #ea580c;">${rawLate} (${lateMinutes} mins)</span>
+            </div>
+            <div class="sp-summary-item">
+              <span class="sp-summary-label">Shift Hours</span>
+              <span class="sp-summary-val">${times.shiftIn} - ${times.shiftOut}</span>
+            </div>
+            <div class="sp-summary-item">
+              <span class="sp-summary-label">Punched In At</span>
+              <span class="sp-summary-val">${times.actualIn || "--"}</span>
+            </div>
+          </div>
+
+          <!-- Swipe Type Selection -->
+          <div class="sp-dialog-field">
+            <label class="sp-field-label">Choose Type of Swipe to Apply:</label>
+            <div class="sp-type-pill-group" id="spTypePills">
+              <label class="sp-type-pill active">
+                <input type="radio" name="spSwipeType" value="IN" checked>
+                <span>In Swipe (${times.shiftIn})</span>
+              </label>
+              <label class="sp-type-pill">
+                <input type="radio" name="spSwipeType" value="OUT">
+                <span>Out Swipe (${times.shiftOut})</span>
+              </label>
+              <label class="sp-type-pill">
+                <input type="radio" name="spSwipeType" value="BOTH">
+                <span>Both In & Out</span>
+              </label>
+              <label class="sp-type-pill">
+                <input type="radio" name="spSwipeType" value="LATE">
+                <span>Late Regularization</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Comment / Reason -->
+          <div class="sp-dialog-field">
+            <label class="sp-field-label" for="spDialogComment">Comment / Reason to Add:</label>
+            <textarea id="spDialogComment" class="sp-dialog-textarea" rows="2" placeholder="Enter reason for regularization...">${defaultComment}</textarea>
+            <div class="sp-field-hint">You can freely edit or type your remarks before redirecting.</div>
+          </div>
+
+          <!-- Apply Swipe Page URL (Uses user-provided URL) -->
+          <div class="sp-dialog-field" id="spUrlFieldRow">
+            <label class="sp-field-label" for="spApplySwipeUrlInput">Apply Swipe Page URL:</label>
+            <input 
+              type="text" 
+              id="spApplySwipeUrlInput" 
+              class="sp-dialog-input" 
+              value="${cachedApplySwipeUrl || ''}" 
+              placeholder="Paste your portal's Apply Swipe URL (e.g. https://.../SwipeRequestList.aspx?mnusr=...)"
+            >
+            <div class="sp-field-hint">Paste your portal's Apply Swipe URL. Saved automatically and reused for all future requests.</div>
+          </div>
+        </div>
+
+        <div class="sp-dialog-footer">
+          <button type="button" class="sp-btn sp-btn-secondary" id="spDialogCopyBtn">📋 Copy Details</button>
+          <button type="button" class="sp-btn sp-btn-primary" id="spDialogRedirectBtn">🚀 Redirect to Apply Swipe & Auto-Fill</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    // Pill active toggle styling
+    const pillInputs = overlay.querySelectorAll('input[name="spSwipeType"]');
+    pillInputs.forEach(input => {
+      input.addEventListener("change", () => {
+        overlay.querySelectorAll(".sp-type-pill").forEach(p => p.classList.remove("active"));
+        input.closest(".sp-type-pill")?.classList.add("active");
+      });
+    });
+
+    // Close handlers
+    const closeDialog = () => overlay.remove();
+    overlay.querySelector("#spDialogClose")?.addEventListener("click", closeDialog);
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) closeDialog();
+    });
+
+    // Copy Button
+    overlay.querySelector("#spDialogCopyBtn")?.addEventListener("click", () => {
+      const selectedType = overlay.querySelector('input[name="spSwipeType"]:checked')?.value || "IN";
+      const comment = overlay.querySelector("#spDialogComment")?.value || "";
+      const text = `Date: ${rawDate}\nLate: ${rawLate} (${lateMinutes}m)\nSwipe Type: ${selectedType}\nComment: ${comment}`;
+      try {
+        navigator.clipboard.writeText(text);
+        showToast("✓ Details copied to clipboard!", "success");
+      } catch (_) {
+        showToast("✓ Copied!", "success");
+      }
+    });
+
+    // Redirect & Auto-Fill Button
+    overlay.querySelector("#spDialogRedirectBtn")?.addEventListener("click", () => {
+      const selectedType = overlay.querySelector('input[name="spSwipeType"]:checked')?.value || "IN";
+      const comment = overlay.querySelector("#spDialogComment")?.value || defaultComment;
+      let swipeTime = times.shiftIn;
+      if (selectedType === "OUT") swipeTime = times.shiftOut;
+
+      const payload = {
+        rawDate,
+        date: rawDate,
+        lateMinutes,
+        rawLate,
+        swipeType: selectedType,
+        swipeTime,
+        comment,
+        timestamp: Date.now()
+      };
+
+      try {
+        sessionStorage.setItem("spine_pending_swipe", JSON.stringify(payload));
+      } catch (_) {}
+      if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.set({ spine_pending_swipe: payload });
+      }
+
+      // Check if native modal is already present or opened via row
+      const nativeBtn = findNativeSwipeTrigger(tr);
+      if (nativeBtn) {
+        showToast(`Opening Apply Swipe for <strong>${rawDate}</strong>...`, "info");
+        closeDialog();
+        nativeBtn.click();
+        watchAndAutoFillModal();
+        return;
+      }
+
+      // Use user-provided URL from input or cached storage
+      const customUrlInput = overlay.querySelector("#spApplySwipeUrlInput");
+      const targetUrl = (customUrlInput ? customUrlInput.value.trim() : "") || cachedApplySwipeUrl;
+
+      if (!targetUrl) {
+        showToast("Please enter your portal's Apply Swipe URL in the box above!", "warning");
+        if (customUrlInput) {
+          customUrlInput.focus();
+          customUrlInput.style.borderColor = "#ea580c";
+        }
+        return;
+      }
+
+      // Save user-provided URL to storage for future clicks
+      cachedApplySwipeUrl = targetUrl;
+      if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.sync) {
+        chrome.storage.sync.set({ spine_apply_swipe_url: targetUrl });
+      }
+
+      showToast(`Redirecting to Apply Swipe for <strong>${rawDate}</strong>...`, "info");
+      closeDialog();
+      window.location.href = targetUrl;
+    });
+  }
+
+  function executeApplySwipe(rowData) {
+    openApplySwipeDialog(rowData);
+  }
+
+  function findNativeSwipeTrigger(tr) {
+    if (!tr) return null;
+    const elements = Array.from(tr.querySelectorAll("a, button, input[type='button'], span[onclick], i[onclick], div[onclick]"));
+    for (const el of elements) {
+      if (el.classList.contains("sp-date-swipe-pill") || el.classList.contains("sp-apply-swipe-tag")) continue;
+      
+      const hay = [
+        el.innerText || "",
+        el.getAttribute("title") || "",
+        el.getAttribute("aria-label") || "",
+        el.getAttribute("onclick") || "",
+        el.getAttribute("href") || "",
+        el.className || ""
+      ].join(" ").toLowerCase();
+
+      if (hay.includes("swipe") || hay.includes("regulariz") || hay.includes("apply")) {
+        return el;
+      }
+    }
+    return null;
+  }
+
+  function findOpenModal() {
+    const modals = Array.from(document.querySelectorAll(
+      ".modal.show, .modal.in, .modal[style*='display: block'], [role='dialog']:not([aria-hidden='true']), .ui-dialog:not([style*='display: none']), div[id*='modal' i]:not([style*='display: none']), div[id*='swipe' i]:not([style*='display: none']), div[id*='regulariz' i]:not([style*='display: none'])"
+    ));
+
+    for (const m of modals) {
+      const rect = m.getBoundingClientRect();
+      if (rect.width > 80 && rect.height > 80) {
+        return m;
+      }
+    }
+    return null;
+  }
+
+  function fillModalForm(modal, context) {
+    if (!modal || !context) return false;
+    let filledCount = 0;
+    const reasonText = context.comment || (cachedDefaultReason || "Late mark regularization (${mins}m late) - Swipe missed")
+      .replace(/\${mins}/g, String(context.lateMinutes))
+      .replace(/\${date}/g, String(context.rawDate))
+      .replace(/\${late}/g, String(context.rawLate));
+
+    const textFields = Array.from(modal.querySelectorAll("textarea, input[type='text'], input:not([type])"));
+    for (const field of textFields) {
+      const fieldId = (field.id || field.name || field.placeholder || "").toLowerCase();
+      if (fieldId.includes("date") || fieldId.includes("time") || field.readOnly) continue;
+
+      if (
+        field.tagName === "TEXTAREA" ||
+        fieldId.includes("reason") ||
+        fieldId.includes("remark") ||
+        fieldId.includes("desc") ||
+        fieldId.includes("comment") ||
+        fieldId.includes("narration")
+      ) {
+        field.value = reasonText;
+        field.dataset.spineAutofilled = "true";
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+        field.dispatchEvent(new Event("change", { bubbles: true }));
+        field.dispatchEvent(new Event("blur", { bubbles: true }));
+        filledCount++;
+        break;
+      }
+    }
+
+    const selects = Array.from(modal.querySelectorAll("select"));
+    for (const select of selects) {
+      if (select.disabled) continue;
+      const options = Array.from(select.options);
+      let targetOption = null;
+
+      const keywords = ["late", "swipe", "missed", "technical", "delay", "forgot", "punch"];
+      for (const kw of keywords) {
+        targetOption = options.find(opt => (opt.text || "").toLowerCase().includes(kw));
+        if (targetOption) break;
+      }
+
+      if (targetOption && select.value !== targetOption.value) {
+        select.value = targetOption.value;
+        select.dataset.spineAutofilled = "true";
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        filledCount++;
+      }
+    }
+
+    return filledCount > 0;
+  }
+
+  function watchAndAutoFillModal() {
+    let attempts = 0;
+    const maxAttempts = 20;
+
+    const timer = setInterval(() => {
+      attempts++;
+      const modal = findOpenModal();
+
+      if (modal) {
+        clearInterval(timer);
+        let pending = null;
+        try {
+          pending = JSON.parse(sessionStorage.getItem("spine_pending_swipe"));
+        } catch (_) {}
+        fillModalForm(modal, pending || {});
+        showToast("✓ Auto-filled swipe details!", "success");
+        return;
+      }
+
+      if (attempts >= maxAttempts) {
+        clearInterval(timer);
+      }
+    }, 250);
+  }
+
+  /* ==========================================================================
+     Auto-Fill Logic on Destination Apply Swipe Page (AddSwipeRequest.aspx)
+     ========================================================================== */
+  let addButtonClicked = false;
+
+  function findFieldByLabel(labelRegex, selector = "input, select, textarea") {
+    const candidates = Array.from(document.querySelectorAll("label, td, th, span, div"));
+    for (const el of candidates) {
+      // Must be a small text node / direct label, not the whole page container
+      if (el.children.length > 3) continue;
+      const text = (el.innerText || "").trim().toLowerCase();
+      if (labelRegex.test(text)) {
+        if (el.tagName === "LABEL") {
+          const forId = el.getAttribute("for");
+          if (forId) {
+            const target = document.getElementById(forId);
+            if (target && target.matches(selector)) return target;
+          }
+        }
+
+        const sibling = el.nextElementSibling;
+        if (sibling) {
+          if (sibling.matches(selector)) return sibling;
+          const inside = sibling.querySelector(selector);
+          if (inside) return inside;
+        }
+
+        const td = el.closest("td");
+        if (td && td.nextElementSibling) {
+          const field = td.nextElementSibling.querySelector(selector);
+          if (field) return field;
+        }
+
+        const parent = el.parentElement;
+        if (parent) {
+          const field = parent.querySelector(selector);
+          if (field && field !== el) return field;
+        }
+      }
+    }
+    return null;
+  }
+
+  function findAddNewSwipeButton() {
+    const candidates = Array.from(document.querySelectorAll(
+      "input[type='submit'], input[type='button'], button, a.btn, a[id*='Add' i], a[id*='Apply' i], input[id*='Add' i], input[id*='Apply' i], a"
+    ));
+    for (const el of candidates) {
+      if (el.classList.contains("sp-date-swipe-pill") || el.classList.contains("sp-banner-btn")) continue;
+      const text = (el.value || el.innerText || el.title || "").toLowerCase().trim();
+      const id = (el.id || "").toLowerCase();
+      if (
+        text === "add" ||
+        text === "add new" ||
+        text === "add request" ||
+        text === "apply" ||
+        text === "apply swipe" ||
+        text.includes("add new") ||
+        id.includes("btnadd") ||
+        id.includes("btnapply") ||
+        id.includes("lnkadd") ||
+        id.includes("btnnew")
+      ) {
+        return el;
+      }
+    }
+    return null;
+  }
+
+  function tryFillApplySwipeForm(payload) {
+    if (!payload || !payload.rawDate) return false;
+
+    // 1. Identify Date Input
+    // In AddSwipeRequest.aspx: labeled "Request Date" with value e.g. "31-Oct-26"
+    const dateInput = findFieldByLabel(/request\s*date/i, "input") ||
+      document.querySelector("input[id*='txtRequestDate' i], input[id*='txtDate' i], input[id*='SwipeDate' i], input.datepicker, input[id*='dt' i]");
+
+    // If on SwipeRequestList.aspx and no date input is visible yet, auto-click the "Add New" button!
+    if (!dateInput) {
+      if (!addButtonClicked) {
+        const addBtn = findAddNewSwipeButton();
+        if (addBtn) {
+          addButtonClicked = true;
+          showToast("⚡ Opening Add Swipe Request form...", "info");
+          addBtn.click();
+        }
+      }
+      return false;
+    }
+
+    // 2. Set Request Date (format: "26-Oct-26")
+    const dMatch = payload.rawDate.match(/(\d{1,2})[-/ ]?([A-Za-z]{3}|\d{1,2})[-/ ]?(\d{2,4})/);
+    let day = "26", mon = "Oct", yr = "26";
+    if (dMatch) {
+      day = String(dMatch[1]).padStart(2, "0");
+      mon = dMatch[2];
+      yr = dMatch[3].length === 4 ? dMatch[3].slice(2) : dMatch[3];
+    }
+    const formattedDate = `${day}-${mon}-${yr}`; // Matches Spine's exact "31-Oct-26" format!
+
+    if (dateInput.value !== formattedDate) {
+      dateInput.value = formattedDate;
+      dateInput.dataset.spineAutofilled = "true";
+      dateInput.dispatchEvent(new Event("input", { bubbles: true }));
+      dateInput.dispatchEvent(new Event("change", { bubbles: true }));
+      dateInput.dispatchEvent(new Event("blur", { bubbles: true }));
+
+      try {
+        if (typeof window.$ !== "undefined" && window.$(dateInput).datepicker) {
+          window.$(dateInput).datepicker("setDate", formattedDate);
+        }
+      } catch (_) {}
+    }
+
+    // 3. Select Swipe Request Category *
+    // In AddSwipeRequest.aspx: dropdown next to "Swipe Request Category *"
+    const categorySelect = findFieldByLabel(/category/i, "select") ||
+      document.querySelector("select[id*='Category' i], select[id*='ddlCat' i]");
+
+    if (categorySelect && categorySelect.options.length > 1) {
+      const opts = Array.from(categorySelect.options);
+      // Look for options like "Late", "Swipe Missed", "Technical", "Forgot"
+      const keywords = ["late", "swipe", "missed", "technical", "delay", "regulariz", "punch", "duty"];
+      let chosenCat = null;
+      for (const kw of keywords) {
+        chosenCat = opts.find(o => (o.text || "").toLowerCase().includes(kw));
+        if (chosenCat) break;
+      }
+      // Fallback to first non-empty option if none matched
+      if (!chosenCat) {
+        chosenCat = opts.find(o => o.value && o.value !== "0" && !o.text.toLowerCase().includes("select"));
+      }
+      if (chosenCat && categorySelect.value !== chosenCat.value) {
+        categorySelect.value = chosenCat.value;
+        categorySelect.dataset.spineAutofilled = "true";
+        categorySelect.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    }
+
+    // 4. Select In/Out Mode
+    // In AddSwipeRequest.aspx: dropdown next to "In/Out Mode" with options "In", "Out", "Both"
+    const modeSelect = findFieldByLabel(/mode/i, "select") ||
+      document.querySelector("select[id*='Mode' i], select[id*='ddlMode' i]");
+
+    if (modeSelect) {
+      const opts = Array.from(modeSelect.options);
+      const targetModeText = payload.swipeType === "OUT" ? "out" : payload.swipeType === "BOTH" ? "both" : "in";
+      const matchedOpt = opts.find(o => (o.text || "").toLowerCase().trim() === targetModeText || (o.value || "").toLowerCase() === targetModeText);
+      if (matchedOpt && modeSelect.value !== matchedOpt.value) {
+        modeSelect.value = matchedOpt.value;
+        modeSelect.dataset.spineAutofilled = "true";
+        modeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    }
+
+    // 5. Fill In Time or Out Time
+    const inTimeInput = findFieldByLabel(/in\s*time/i, "input") ||
+      document.querySelector("input[id*='txtInTime' i], input[id*='InTime' i]");
+    const outTimeInput = findFieldByLabel(/out\s*time/i, "input") ||
+      document.querySelector("input[id*='txtOutTime' i], input[id*='OutTime' i]");
+
+    if (payload.swipeType === "IN" && inTimeInput && !inTimeInput.disabled && !inTimeInput.readOnly) {
+      if (payload.swipeTime) {
+        inTimeInput.value = payload.swipeTime;
+        inTimeInput.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    } else if (payload.swipeType === "OUT" && outTimeInput && !outTimeInput.disabled && !outTimeInput.readOnly) {
+      if (payload.swipeTime) {
+        outTimeInput.value = payload.swipeTime;
+        outTimeInput.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    }
+
+    // 6. Fill Reason / Remarks
+    // In AddSwipeRequest.aspx: textarea under "Reason *"
+    const reasonTextarea = findFieldByLabel(/reason/i, "textarea, input") ||
+      document.querySelector("textarea[id*='Reason' i], textarea[id*='Remarks' i], textarea");
+
+    if (reasonTextarea) {
+      const targetComment = payload.comment || `Late mark regularization (${payload.lateMinutes}m late on ${payload.rawDate}) - Swipe missed`;
+      if (!reasonTextarea.value || reasonTextarea.dataset.spineAutofilled) {
+        reasonTextarea.value = targetComment;
+        reasonTextarea.dataset.spineAutofilled = "true";
+        reasonTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+        reasonTextarea.dispatchEvent(new Event("change", { bubbles: true }));
+        reasonTextarea.dispatchEvent(new Event("blur", { bubbles: true }));
+      }
+    }
+
+    // 7. Inject top confirmation banner on page
+    if (!document.getElementById("spine-page-autofill-banner")) {
+      const banner = document.createElement("div");
+      banner.id = "spine-page-autofill-banner";
+      banner.className = "sp-page-autofill-banner";
+      banner.innerHTML = `
+        <span style="font-size: 24px;">⚡</span>
+        <div style="flex: 1;">
+          <strong>Spine Helper Auto-Filled:</strong> Date <strong>${formattedDate}</strong> with <strong>${payload.swipeType} Mode (${payload.swipeTime || ""})</strong> and your remarks! Please review and click <strong>Save</strong>.
+        </div>
+        <button type="button" class="sp-autofill-refill-btn" id="spPageRefillBtn">Re-fill</button>
+      `;
+      banner.querySelector("#spPageRefillBtn")?.addEventListener("click", () => {
+        tryFillApplySwipeForm(payload);
+        showToast("✓ Re-applied auto-fill values!", "success");
+      });
+
+      // Insert at the top of the form or content panel
+      const container = document.querySelector(".content, #form1, form, .container, body");
+      if (container) {
+        container.insertBefore(banner, container.firstChild);
+      }
+    }
+
+    // 8. Highlight the Save Button
+    const saveBtn = Array.from(document.querySelectorAll("input[type='submit'], input[type='button'], button, a.btn")).find(
+      b => (b.value || b.innerText || "").trim().toLowerCase() === "save"
+    );
+    if (saveBtn) {
+      saveBtn.style.boxShadow = "0 0 0 3px #16a34a, 0 4px 14px rgba(22, 163, 74, 0.4)";
+      saveBtn.style.transition = "box-shadow 0.2s ease";
+    }
+
+    return true;
+  }
+
+  function processPendingSwipeOnPage(payload) {
+    if (!payload || !payload.rawDate) return;
+    if (Date.now() - (payload.timestamp || 0) > 15 * 60 * 1000) {
+      sessionStorage.removeItem("spine_pending_swipe");
+      return;
+    }
+
+    let attempts = 0;
+    const maxAttempts = 15;
+
+    const fillTimer = setInterval(() => {
+      attempts++;
+      const isFilled = tryFillApplySwipeForm(payload);
+      if (isFilled || attempts >= maxAttempts) {
+        clearInterval(fillTimer);
+        if (isFilled) {
+          sessionStorage.removeItem("spine_pending_swipe");
+          if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+            chrome.storage.local.remove("spine_pending_swipe");
+          }
+          showToast(`✓ Auto-filled swipe for <strong>${payload.rawDate}</strong>!`, "success");
+        }
+      }
+    }, 350);
+  }
+
+  function checkAndFillApplySwipePage() {
+    let pendingRaw = null;
+    try {
+      pendingRaw = sessionStorage.getItem("spine_pending_swipe");
+    } catch (_) {}
+
+    if (!pendingRaw) {
+      if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.get({ spine_pending_swipe: null }, (res) => {
+          if (res.spine_pending_swipe) {
+            processPendingSwipeOnPage(res.spine_pending_swipe);
+          }
+        });
+      }
+      return;
+    }
+
+    try {
+      const payload = JSON.parse(pendingRaw);
+      processPendingSwipeOnPage(payload);
+    } catch (_) {}
+  }
+
+  function renderLateHoursTracker() {
+    const tableInfo = findAttendanceTableAndColumns();
+    if (!tableInfo) return;
+
+    const { table, lateColIndex, dateColIndex, dateRows } = tableInfo;
+
+    // 1. Clean up any previous markers
+    table.querySelectorAll(".spine-late-cell-marker").forEach(el => {
+      el.classList.remove("spine-late-cell-marker");
+      el.removeAttribute("title");
+    });
+    table.querySelectorAll(".sp-apply-swipe-tag").forEach(el => el.remove());
+    table.querySelectorAll(".sp-date-swipe-pill").forEach(el => el.remove());
+    table.querySelectorAll(".sp-late-row-highlight").forEach(el => {
+      el.classList.remove("sp-late-row-highlight");
+    });
+    table.querySelectorAll(".sp-covered-by-grace").forEach(el => {
+      el.classList.remove("sp-covered-by-grace");
+      el.removeAttribute("title");
+    });
+
+    // 2. Extract valid data rows
+    const dataRows = [];
+    for (const tr of dateRows) {
+      const lateCell = tr.cells[lateColIndex];
+      const dateCell = tr.cells[dateColIndex] || tr.cells[0];
+      if (!lateCell) continue;
+
+      const rawLate = norm(lateCell.innerText);
+      const rawDate = dateCell ? norm(dateCell.innerText) : "";
+      const lateMins = parseLateValueToMinutes(rawLate);
+
+      dataRows.push({
+        tr,
+        lateCell,
+        dateCell,
+        rawLate,
+        rawDate,
+        lateMinutes: lateMins
+      });
+    }
+
+    if (!dataRows.length) return;
+
+    // 3. Calculate Total Late Minutes
+    const totalLateMinutes = dataRows.reduce((sum, r) => sum + r.lateMinutes, 0);
+    const totalLateHours = (totalLateMinutes / 60).toFixed(2);
+    console.log(`⏱️ [Spine Helper] Attendance Sheet: ${dataRows.length} days | Total Late: ${totalLateMinutes}m (${fmt(totalLateMinutes)})`);
+
+    // 4. Run Greedy Algorithm: Sort rows with late > 0 from largest to lowest
+    const rowsWithLate = dataRows.filter(r => r.lateMinutes > 0);
+    rowsWithLate.sort((a, b) => b.lateMinutes - a.lateMinutes);
+
+    let currentRemaining = totalLateMinutes;
+    const markedRows = new Set();
+
+    if (totalLateMinutes > ALLOWED_GRACE_MINUTES) {
+      for (const row of rowsWithLate) {
+        if (currentRemaining <= ALLOWED_GRACE_MINUTES) {
+          break; // Target <= 45 mins reached! Stop!
+        }
+        markedRows.add(row);
+        currentRemaining -= row.lateMinutes;
+      }
+    }
+
+    console.log(`🎯 [Spine Helper] Marked ${markedRows.size} days for Apply Swipe (Largest to lowest). Remaining Late: ${currentRemaining}m`);
+
+    // 5. Apply Visual Markers on UI
+    for (const row of dataRows) {
+      if (row.lateMinutes === 0) continue;
+
+      if (markedRows.has(row)) {
+        // HIGHLIGHT: Orange Cell Marker (Matches user screenshot)
+        row.lateCell.classList.add("spine-late-cell-marker");
+        row.lateCell.title = `⚡ Apply Swipe Required: ${row.rawLate} (${row.lateMinutes} mins late)\nClick to Apply Swipe!`;
+
+        const onSwipeClick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          executeApplySwipe(row);
+        };
+        row.lateCell.onclick = onSwipeClick;
+
+        // Add "Apply Swipe" tag inside cell
+        if (!row.lateCell.querySelector(".sp-apply-swipe-tag")) {
+          const tag = document.createElement("span");
+          tag.className = "sp-apply-swipe-tag";
+          tag.textContent = "Apply Swipe";
+          row.lateCell.appendChild(tag);
+        }
+
+        // Add "⚡ Apply Swipe" pill in Date column
+        if (row.dateCell && !row.dateCell.querySelector(".sp-date-swipe-pill")) {
+          const pill = document.createElement("button");
+          pill.type = "button";
+          pill.className = "sp-date-swipe-pill";
+          pill.textContent = "⚡ Apply Swipe";
+          pill.title = `Click to Apply Swipe for ${row.rawDate || "this date"} (${row.rawLate})`;
+          pill.onclick = onSwipeClick;
+          row.dateCell.appendChild(pill);
+        } else if (row.dateCell) {
+          const pill = row.dateCell.querySelector(".sp-date-swipe-pill");
+          if (pill) pill.onclick = onSwipeClick;
+        }
+
+        // Highlight Row
+        row.tr.classList.add("sp-late-row-highlight");
+      } else {
+        // Safe: Covered by the 45-minute grace allowance
+        row.lateCell.classList.add("sp-covered-by-grace");
+        row.lateCell.title = `✅ Late: ${row.rawLate} (${row.lateMinutes} mins) - Covered by 45m grace limit (No swipe needed)`;
+        row.lateCell.onclick = null;
+      }
+    }
+
+    // 6. Display Clean Summary Banner Above Table
+    let banner = document.getElementById(LATE_BANNER_ID);
+    if (!banner) {
+      banner = document.createElement("div");
+      banner.id = LATE_BANNER_ID;
+    }
+
+    if (banner.parentElement !== table.parentElement) {
+      banner.remove();
+      table.parentElement.insertBefore(banner, table);
+    }
+
+    if (totalLateMinutes > ALLOWED_GRACE_MINUTES) {
+      const markedListStr = Array.from(markedRows)
+        .map(r => `<button type="button" class="sp-banner-badge sp-banner-btn" data-date="${r.rawDate}" title="Click to apply swipe for ${r.rawDate} (${r.rawLate})">⚡ ${r.rawDate}: ${r.rawLate}</button>`)
+        .join(" ");
+      const excessMins = totalLateMinutes - ALLOWED_GRACE_MINUTES;
+
+      banner.innerHTML = `
+        <div class="sp-banner-main">
+          <span class="sp-banner-icon">⏱️</span>
+          <span>Total Late: <strong>${fmt(totalLateMinutes)} (${totalLateMinutes} mins / ${totalLateHours} hrs)</strong> | Allowed Grace: <strong>${ALLOWED_GRACE_MINUTES} mins</strong> | Excess to Adjust: <strong>${excessMins} mins</strong></span>
+        </div>
+        <div class="sp-banner-sub">
+          👉 <strong>${markedRows.size} Days Marked for "Apply Swipe" (Largest to Lowest):</strong> ${markedListStr}
+          <br>Regularizing these ${markedRows.size} days brings remaining late down to <strong>${currentRemaining} mins (<= ${ALLOWED_GRACE_MINUTES} mins safe)</strong>.
+        </div>
+      `;
+
+      // Wire interactive click on banner badges
+      banner.querySelectorAll(".sp-banner-btn").forEach(btn => {
+        btn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const targetDate = btn.dataset.date;
+          const targetRow = dataRows.find(r => r.rawDate === targetDate);
+          if (targetRow) {
+            targetRow.tr.scrollIntoView({ behavior: "smooth", block: "center" });
+            executeApplySwipe(targetRow);
+          }
+        };
+      });
+    } else {
+      banner.innerHTML = `
+        <div class="sp-banner-main" style="color: #15803d;">
+          <span class="sp-banner-icon">✅</span>
+          <span>Total Late: <strong>${totalLateMinutes} mins (${fmt(totalLateMinutes)})</strong> | Allowed Grace: <strong>${ALLOWED_GRACE_MINUTES} mins</strong></span>
+        </div>
+        <div class="sp-banner-sub" style="color: #15803d;">
+          Your late hours are completely within the ${ALLOWED_GRACE_MINUTES}-minute allowed grace limit. No swipe regularization required!
+        </div>
+      `;
+    }
+  }
+
+  /* ==========================================================================
+     Master Render & Event Listeners
+     ========================================================================== */
+  function render() {
+    try {
+      renderPunchSummary();
+      renderLateHoursTracker();
+    } catch (err) {
+      console.error("Spine Helper Render Error:", err);
+    }
   }
 
   function scheduleRender() {
@@ -463,11 +1374,21 @@
     if (observerStarted) return;
     observerStarted = true;
 
-    const mo = new MutationObserver(() => {
+    activeMutationObserver = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (
+          m.target.id === PUNCH_PANEL_ID ||
+          m.target.id === LATE_BANNER_ID ||
+          m.target.closest?.(`#${PUNCH_PANEL_ID}`) ||
+          m.target.closest?.(`#${LATE_BANNER_ID}`)
+        ) {
+          return;
+        }
+      }
       scheduleRender();
     });
 
-    mo.observe(document.body, {
+    activeMutationObserver.observe(document.body, {
       childList: true,
       subtree: true,
       attributes: true,
@@ -475,12 +1396,98 @@
     });
   }
 
-  function init() {
-    startObserver();
-    scheduleRender();
-    window.addEventListener("load", scheduleRender, { passive: true });
-    document.addEventListener("click", () => setTimeout(scheduleRender, 250), { passive: true });
+  function onWindowClick() {
+    setTimeout(scheduleRender, 250);
   }
 
-  init();
+  function startHelper() {
+    if (isRunning) return;
+    isRunning = true;
+    console.log(`🚀 [Spine Helper] Active on: ${window.location.hostname}`);
+    startObserver();
+    scheduleRender();
+    checkAndFillApplySwipePage();
+    window.addEventListener("load", scheduleRender, { passive: true });
+    document.addEventListener("click", onWindowClick, { passive: true });
+  }
+
+  function cleanup() {
+    if (!isRunning) return;
+    if (activeMutationObserver) {
+      activeMutationObserver.disconnect();
+      activeMutationObserver = null;
+    }
+    observerStarted = false;
+    clearTimeout(renderTimer);
+    clearInterval(tickInterval);
+    window.removeEventListener("load", scheduleRender);
+    document.removeEventListener("click", onWindowClick);
+    document.getElementById(PUNCH_PANEL_ID)?.remove();
+    document.getElementById(LATE_BANNER_ID)?.remove();
+    document.querySelectorAll(".spine-late-cell-marker, .sp-late-row-highlight, .sp-covered-by-grace").forEach((el) => {
+      el.classList.remove("spine-late-cell-marker", "sp-late-row-highlight", "sp-covered-by-grace");
+    });
+    document.querySelectorAll(".sp-date-swipe-pill").forEach((el) => el.remove());
+    isRunning = false;
+  }
+
+  /* ==========================================================================
+     Active URL Evaluation & Storage Sync
+     ========================================================================== */
+  function evaluateActiveState() {
+    const matcher = window.SpineUrlMatcher;
+    const currentHref = window.location.href;
+
+    if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.sync) {
+      // Fallback if storage API is unavailable
+      startHelper();
+      return;
+    }
+
+    chrome.storage.sync.get(
+      {
+        spine_allowed_patterns: [],
+        spine_global_active: false,
+        spine_default_reason: "",
+        spine_apply_swipe_url: ""
+      },
+      (items) => {
+        if (items.spine_default_reason) {
+          cachedDefaultReason = items.spine_default_reason;
+        }
+        if (items.spine_apply_swipe_url) {
+          cachedApplySwipeUrl = items.spine_apply_swipe_url;
+        }
+        const patterns = items.spine_allowed_patterns || [];
+        const isGlobal = Boolean(items.spine_global_active);
+        const shouldRun = matcher ? matcher.isMatch(currentHref, patterns, isGlobal) : true;
+
+        if (shouldRun) {
+          startHelper();
+        } else if (isRunning) {
+          console.log("⏸️ [Spine Helper] Deactivating (Site not in active sites list)");
+          cleanup();
+        }
+      }
+    );
+  }
+
+  // Live updates when user adds/removes URLs in popup or updates settings
+  if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.onChanged) {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === "sync") {
+        if (changes.spine_default_reason) {
+          cachedDefaultReason = changes.spine_default_reason.newValue || cachedDefaultReason;
+        }
+        if (changes.spine_apply_swipe_url) {
+          cachedApplySwipeUrl = changes.spine_apply_swipe_url.newValue || cachedApplySwipeUrl;
+        }
+        if (changes.spine_allowed_patterns || changes.spine_global_active) {
+          evaluateActiveState();
+        }
+      }
+    });
+  }
+
+  evaluateActiveState();
 })();

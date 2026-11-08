@@ -1,93 +1,604 @@
-#spine-hours-summary-panel {
-  margin: 12px 0 16px;
+/* ==========================================================================
+   Spine Attendance Hours Helper - Stylesheet v1.2.0
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   FEATURE 1: Daily Punch Modal Summary (Purana In/Out Flow)
+   -------------------------------------------------------------------------- */
+#spine-punch-hours-summary {
+  margin: 10px 0 14px 0;
+  width: 100%;
+  box-sizing: border-box;
   font-family: Arial, sans-serif;
 }
 
-.spine-hours-card {
-  background: #f8fbff;
-  border: 1px solid #cfe1ff;
-  border-radius: 10px;
-  padding: 14px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+#spine-punch-hours-summary .sp-card {
+  background: #eef7ff;
+  border: 1px solid #c8dced;
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 }
 
-.spine-hours-title {
+#spine-punch-hours-summary .sp-title {
   font-size: 16px;
   font-weight: 700;
-  color: #163a63;
+  color: #234861;
   margin-bottom: 10px;
 }
 
-.spine-hours-grid {
+#spine-punch-hours-summary .sp-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(160px, 1fr));
-  gap: 12px;
-  margin-bottom: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 8px;
 }
 
-.spine-hours-metric {
+#spine-punch-hours-summary .sp-box {
   background: #ffffff;
-  border: 1px solid #dde9f8;
+  border: 1px solid #dce6ef;
+  border-radius: 6px;
+  padding: 10px;
+}
+
+#spine-punch-hours-summary .sp-label {
+  font-size: 11px;
+  color: #617284;
+  margin-bottom: 4px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+#spine-punch-hours-summary .sp-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: #0a517d;
+}
+
+#spine-punch-hours-summary .sp-value.small {
+  font-size: 16px;
+}
+
+#spine-punch-hours-summary .sp-meta,
+#spine-punch-hours-summary .sp-line {
+  font-size: 12px;
+  color: #48596a;
+}
+
+#spine-punch-hours-summary .sp-line {
+  padding: 4px 0;
+  border-bottom: 1px dashed #dfe6ec;
+}
+
+#spine-punch-hours-summary .sp-warning {
+  color: #a13d3d;
+}
+
+#spine-punch-hours-summary .sp-good {
+  color: #1f8a43 !important;
+}
+
+#spine-punch-hours-summary .sp-bad {
+  color: #c0392b !important;
+}
+
+#spine-punch-hours-summary .sp-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+#spine-punch-hours-summary details {
+  margin-top: 8px;
+}
+
+#spine-punch-hours-summary summary {
+  cursor: pointer;
+  color: #0a517d;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+/* --------------------------------------------------------------------------
+   FEATURE 2: Late Hours Banner & Highlighting (Highest to Lowest Greedy)
+   -------------------------------------------------------------------------- */
+#spine-late-banner {
+  margin: 10px 0 14px 0;
+  background: #fff8f0;
+  border: 1px solid #fed7aa;
+  border-left: 5px solid #ea580c;
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-family: Arial, sans-serif;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  box-sizing: border-box;
+}
+
+#spine-late-banner .sp-banner-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #9a3412;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+#spine-late-banner .sp-banner-icon {
+  font-size: 18px;
+}
+
+#spine-late-banner .sp-banner-sub {
+  font-size: 12px;
+  color: #7c2d12;
+  line-height: 1.5;
+}
+
+#spine-late-banner .sp-banner-badge {
+  display: inline-block;
+  background: #ea580c;
+  color: #ffffff;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 700;
+  font-size: 11px;
+  margin: 0 2px;
+}
+
+/* Cell Highlight (Matches user screenshot orange color) */
+.spine-late-cell-marker {
+  background-color: #ffa742 !important;
+  color: #ffffff !important;
+  font-weight: 700 !important;
+  text-align: center !important;
+  border-radius: 4px !important;
+  cursor: pointer !important;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(255, 167, 66, 0.4) !important;
+  position: relative !important;
+}
+
+.spine-late-cell-marker:hover {
+  filter: brightness(1.08) !important;
+  box-shadow: 0 2px 8px rgba(234, 88, 12, 0.5) !important;
+}
+
+/* Small tag displayed inside or next to the late value */
+.sp-apply-swipe-tag {
+  display: block;
+  font-size: 9px;
+  font-weight: 700;
+  color: #ffffff;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin-top: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  line-height: 1.2;
+}
+
+/* Badge on Date column (Interactive Clickable Trigger) */
+.sp-date-swipe-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: #ea580c;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  margin-left: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(234, 88, 12, 0.35);
+  vertical-align: middle;
+  text-transform: uppercase;
+  transition: transform 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+  user-select: none;
+  border: none;
+}
+
+.sp-date-swipe-pill:hover {
+  background: #c2410c;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(194, 65, 12, 0.45);
+}
+
+.sp-date-swipe-pill:active {
+  transform: translateY(0);
+}
+
+/* Clickable Banner Badges */
+.sp-banner-badge.sp-banner-btn {
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  margin: 0 3px 3px 0;
+  transition: transform 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.sp-banner-badge.sp-banner-btn:hover {
+  background: #c2410c;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+.sp-banner-badge.sp-banner-btn:active {
+  transform: translateY(0);
+}
+
+/* Row Highlight */
+.sp-late-row-highlight {
+  background-color: rgba(255, 167, 66, 0.12) !important;
+  border-left: 4px solid #ea580c !important;
+}
+
+/* Subtle style for late days that are covered by the 45m grace (No swipe needed) */
+.sp-covered-by-grace {
+  background-color: rgba(34, 197, 94, 0.08) !important;
+}
+
+/* --------------------------------------------------------------------------
+   FEATURE 3: Toast Notifications & Modal Auto-Fill
+   -------------------------------------------------------------------------- */
+#spine-toast {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-20px);
+  background: #0f172a;
+  color: #ffffff;
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-family: Arial, sans-serif;
+  font-size: 13px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.28);
+  z-index: 9999999;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1), transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  box-sizing: border-box;
+}
+
+#spine-toast.spine-toast-show {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(-50%) translateY(0);
+}
+
+#spine-toast.spine-toast-success {
+  background: #064e3b;
+  border-left: 4px solid #10b981;
+}
+
+#spine-toast.spine-toast-info {
+  background: #0e7490;
+  border-left: 4px solid #38bdf8;
+}
+
+#spine-toast.spine-toast-warning {
+  background: #9a3412;
+  border-left: 4px solid #f97316;
+}
+
+.spine-toast-icon {
+  font-size: 16px;
+}
+
+/* Auto-fill Banner inside Spine Modal */
+.sp-modal-autofill-banner {
+  margin: 10px 0 14px 0;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-left: 4px solid #2563eb;
+  border-radius: 6px;
+  padding: 9px 12px;
+  font-size: 12px;
+  color: #1e40af;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  font-family: Arial, sans-serif;
+}
+
+.sp-autofill-refill-btn {
+  background: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.sp-autofill-refill-btn:hover {
+  background: #1d4ed8;
+}
+
+/* --------------------------------------------------------------------------
+   FEATURE 3.1: Apply Swipe Redirect & Selection Dialog
+   -------------------------------------------------------------------------- */
+.sp-dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(4px);
+  z-index: 99999999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  box-sizing: border-box;
+  animation: spFadeIn 0.2s ease-out;
+}
+
+@keyframes spFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.sp-dialog-card {
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25), 0 1px 3px rgba(0, 0, 0, 0.1);
+  width: 100%;
+  max-width: 480px;
+  overflow: hidden;
+  font-family: Arial, sans-serif;
+  color: #1e293b;
+  display: flex;
+  flex-direction: column;
+  animation: spSlideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes spSlideUp {
+  from { transform: translateY(20px) scale(0.97); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.sp-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.sp-dialog-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f4c81;
+}
+
+.sp-dialog-icon {
+  font-size: 18px;
+}
+
+.sp-dialog-close-btn {
+  background: none;
+  border: none;
+  font-size: 22px;
+  color: #64748b;
+  cursor: pointer;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.sp-dialog-close-btn:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.sp-dialog-body {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 75vh;
+  overflow-y: auto;
+}
+
+/* Summary Box */
+.sp-dialog-summary-box {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
   border-radius: 8px;
   padding: 10px 12px;
 }
 
-.spine-hours-label {
-  font-size: 12px;
-  color: #5d6b7a;
-  margin-bottom: 4px;
-}
-
-.spine-hours-value {
-  font-size: 22px;
-  font-weight: 700;
-  color: #0f4c81;
-}
-
-.spine-hours-meta {
-  font-size: 12px;
-  color: #4a5968;
-  margin-bottom: 8px;
-}
-
-.spine-hours-details summary {
-  cursor: pointer;
-  color: #0f4c81;
-  font-weight: 600;
-  margin-bottom: 8px;
-}
-
-.spine-hours-list,
-.spine-hours-errors {
-  margin-top: 8px;
-}
-
-.spine-hours-row {
+.sp-summary-item {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 6px 0;
-  border-bottom: 1px dashed #d9e2ee;
-  font-size: 12px;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.spine-hours-error-title {
-  margin-top: 10px;
-  margin-bottom: 6px;
+.sp-summary-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #64748b;
+  letter-spacing: 0.4px;
+}
+
+.sp-summary-val {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.sp-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sp-field-label {
   font-size: 12px;
   font-weight: 700;
-  color: #9a2f2f;
+  color: #334155;
 }
 
-.spine-hours-error-item {
-  font-size: 12px;
-  color: #9a2f2f;
-  padding: 3px 0;
+/* Radio Pill Group */
+.sp-type-pill-group {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
 }
 
-.spine-hours-ok,
-.spine-hours-empty {
+.sp-type-pill {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f8fafc;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 6px;
+  cursor: pointer;
   font-size: 12px;
-  color: #2c6b2f;
-  padding: 4px 0;
+  font-weight: 600;
+  color: #334155;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.sp-type-pill:hover {
+  border-color: #0a517d;
+  background: #f0f7ff;
+}
+
+.sp-type-pill input[type="radio"] {
+  cursor: pointer;
+  accent-color: #0a517d;
+}
+
+.sp-type-pill.active {
+  background: #e0f2fe;
+  border-color: #0284c7;
+  color: #0369a1;
+  box-shadow: 0 1px 3px rgba(2, 132, 199, 0.15);
+}
+
+.sp-dialog-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: inherit;
+  color: #1e293b;
+  resize: vertical;
+  min-height: 56px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.sp-dialog-textarea:focus,
+.sp-dialog-input:focus {
+  border-color: #0a517d;
+  box-shadow: 0 0 0 3px rgba(10, 81, 125, 0.12);
+}
+
+.sp-dialog-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: inherit;
+  color: #1e293b;
+  outline: none;
+}
+
+.sp-field-hint {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.sp-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 18px;
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+}
+
+.sp-btn {
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s ease;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sp-btn-secondary {
+  background: #ffffff;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+}
+
+.sp-btn-secondary:hover {
+  background: #f1f5f9;
+  color: #1e293b;
+}
+
+.sp-btn-primary {
+  background: #ea580c;
+  color: #ffffff;
+  box-shadow: 0 2px 4px rgba(234, 88, 12, 0.25);
+}
+
+.sp-btn-primary:hover {
+  background: #c2410c;
+  box-shadow: 0 3px 6px rgba(194, 65, 12, 0.35);
+  transform: translateY(-1px);
+}
+
+/* Page Banner on Apply Swipe destination page */
+.sp-page-autofill-banner {
+  margin: 12px 0 16px 0;
+  background: #f0fdf4;
+  border: 1.5px solid #86efac;
+  border-left: 5px solid #16a34a;
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-family: Arial, sans-serif;
+  font-size: 13px;
+  color: #14532d;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+  animation: spSlideUp 0.3s ease-out;
 }
